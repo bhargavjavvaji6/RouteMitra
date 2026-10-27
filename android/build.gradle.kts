@@ -1,9 +1,15 @@
+plugins {
+    id("com.google.gms.google-services") version "4.4.4" apply false
+}
+
 allprojects {
     repositories {
         google()
         mavenCentral()
     }
 }
+
+
 
 val newBuildDir: Directory =
     rootProject.layout.buildDirectory
@@ -16,7 +22,8 @@ subprojects {
     project.layout.buildDirectory.value(newSubprojectBuildDir)
 }
 subprojects {
-    project.evaluationDependsOn(":app")
+    project.evaluation
+    sOn(":app")
 }
 
 tasks.register<Delete>("clean") {

@@ -7,13 +7,13 @@ import 'screens/splash_screen.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Set system UI overlay style for immersive dark look
+  // Set system UI overlay style for light theme (dark icons on light background)
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: AppTheme.darkCard,
-      systemNavigationBarIconBrightness: Brightness.light,
+      statusBarIconBrightness: Brightness.dark,
+      systemNavigationBarColor: AppTheme.card,
+      systemNavigationBarIconBrightness: Brightness.dark,
     ),
   );
 
@@ -28,7 +28,7 @@ class RouteMitraApp extends StatelessWidget {
     return MaterialApp(
       title: 'RouteMitra',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.darkTheme,
+      theme: AppTheme.lightTheme,
       home: const SplashScreen(),
     );
   }

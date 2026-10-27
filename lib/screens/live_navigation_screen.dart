@@ -3,6 +3,9 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:geolocator/geolocator.dart';
+import '../services/location_service.dart';
 
 import '../core/app_theme.dart';
 import 'members_list_screen.dart';
@@ -19,14 +22,22 @@ class LiveNavigationScreen extends StatefulWidget {
 
 class _LiveNavigationScreenState extends State<LiveNavigationScreen>
     with TickerProviderStateMixin {
+  // Existing UI state
   int _currentSpeed = 80;
   final String _eta = '5h 12m';
   final String _distance = '368 km';
   final String _arrivalTime = '4:53 PM';
   final bool _showMemberBubbles = true;
 
+  // New location state
+  Position? _currentPosition;
+  bool _loadingLocation = true;
+  GoogleMapController? _mapController;
+  StreamSubscription<Position?>? _locationSub;
+
   late Timer _speedTimer;
   late AnimationController _pulseController;
+
 
   @override
   void initState() {
@@ -35,6 +46,17 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat(reverse: true);
+
+    // Start listening to location updates
+    _locationSub = LocationService.getLocationStream().listen((position) {
+      if (!mounted) return;
+      setState(() {
+        _currentPosition = position;
+        if (position != null) {
+          _loadingLocation = false;
+        }
+      });
+    });
 
     // Simulate speed changes
     _speedTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
@@ -48,9 +70,11 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
 
   @override
   void dispose() {
+    _locationSub?.cancel();
     _speedTimer.cancel();
     _pulseController.dispose();
     super.dispose();
+
   }
 
   @override
@@ -59,23 +83,38 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
       backgroundColor: AppTheme.darkBg,
       body: Stack(
         children: [
-          // ── Map background (simulated) ──
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  const Color(0xFF1A2E3E),
-                  const Color(0xFF0D2137),
-                  AppTheme.darkBg.withValues(alpha: 0.95),
-                ],
-              ),
-            ),
-            child: CustomPaint(
-              size: MediaQuery.of(context).size,
-              painter: _MapPainter(),
-            ),
+          // ── Real Google Map ──
+          Positioned.fill(
+            child: _loadingLocation
+                ? const Center(child: CircularProgressIndicator())
+                : GoogleMap(
+                    initialCameraPosition: CameraPosition(
+                      target: _currentPosition != null
+                          ? LatLng(_currentPosition!.latitude, _currentPosition!.longitude)
+                          : const LatLng(0, 0),
+                      zoom: 15,
+                    ),
+                    myLocationEnabled: false,
+                    markers: _currentPosition != null
+                        ? {
+                            Marker(
+                              markerId: const MarkerId('current'),
+                              position: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+                              icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+                            ),
+                          }
+                        : {},
+                    onMapCreated: (GoogleMapController controller) {
+                      _mapController = controller;
+                      if (_currentPosition != null) {
+                        controller.moveCamera(
+                          CameraUpdate.newLatLng(
+                            LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+                          ),
+                        );
+                      }
+                    },
+                  ),
           ),
 
           // ── Top navigation bar ──
@@ -179,6 +218,25 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
 
           // ── Bottom info panel ──
           Positioned(bottom: 0, left: 0, right: 0, child: _bottomPanel()),
+          // Recenter FAB
+          Positioned(
+            bottom: 100,
+            right: 20,
+            child: FloatingActionButton(
+              backgroundColor: AppTheme.primary,
+              foregroundColor: Colors.white,
+              onPressed: () {
+                if (_currentPosition != null && _mapController != null) {
+                  _mapController!.animateCamera(
+                    CameraUpdate.newLatLng(
+                      LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+                    ),
+                  );
+                }
+              },
+              child: const Icon(Icons.my_location),
+            ),
+          ),
         ],
       ),
     );

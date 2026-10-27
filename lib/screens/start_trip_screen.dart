@@ -16,7 +16,7 @@ class StartTripScreen extends StatefulWidget {
 class _StartTripScreenState extends State<StartTripScreen> {
   final _destinationController = TextEditingController();
   int _selectedPeople = 3;
-  final String _tripType = 'friends'; // 'friends' or 'family'
+  final String tripType = 'friends'; // 'friends' or 'family'
   String _quickDest = ''; // 'home', 'office', 'nearby'
   bool _showFuelStations = false;
   bool _showEvCharging = false;
