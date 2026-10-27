@@ -47,16 +47,8 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
       duration: const Duration(seconds: 2),
     )..repeat(reverse: true);
 
-    // Start listening to location updates
-    _locationSub = LocationService.getLocationStream().listen((position) {
-      if (!mounted) return;
-      setState(() {
-        _currentPosition = position;
-        if (position != null) {
-          _loadingLocation = false;
-        }
-      });
-    });
+    // Initialize and listen to real GPS location updates
+    _initLocation();
 
     // Simulate speed changes
     _speedTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
@@ -77,6 +69,30 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
 
   }
 
+  Future<void> _initLocation() async {
+    final pos = await LocationService.getCurrentLocation(timeLimitSeconds: 5);
+    if (!mounted) return;
+    setState(() {
+      _currentPosition = pos;
+      _loadingLocation = false;
+    });
+
+    _locationSub = LocationService.getLocationStream().listen((position) {
+      if (!mounted) return;
+      if (position != null) {
+        setState(() {
+          _currentPosition = position;
+          _loadingLocation = false;
+        });
+        _mapController?.animateCamera(
+          CameraUpdate.newLatLng(
+            LatLng(position.latitude, position.longitude),
+          ),
+        );
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -91,10 +107,11 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
                     initialCameraPosition: CameraPosition(
                       target: _currentPosition != null
                           ? LatLng(_currentPosition!.latitude, _currentPosition!.longitude)
-                          : const LatLng(0, 0),
+                          : const LatLng(17.3850, 78.4867),
                       zoom: 15,
                     ),
-                    myLocationEnabled: false,
+                    myLocationEnabled: _currentPosition != null,
+                    myLocationButtonEnabled: true,
                     markers: _currentPosition != null
                         ? {
                             Marker(
@@ -512,85 +529,4 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
   }
 }
 
-// Simple map painter for visual representation
-class _MapPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final roadPaint = Paint()
-      ..color = const Color(0xFF2A4A5E)
-      ..strokeWidth = 6
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
 
-    final routePaint = Paint()
-      ..color = AppTheme.primary
-      ..strokeWidth = 5
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    // Draw grid lines (roads)
-    for (var i = 0; i < 8; i++) {
-      final y = size.height * (i / 8.0);
-      canvas.drawLine(
-        Offset(0, y),
-        Offset(size.width, y),
-        roadPaint..color = const Color(0xFF1E3A4E).withValues(alpha: 0.3),
-      );
-    }
-    for (var i = 0; i < 6; i++) {
-      final x = size.width * (i / 6.0);
-      canvas.drawLine(
-        Offset(x, 0),
-        Offset(x, size.height),
-        roadPaint..color = const Color(0xFF1E3A4E).withValues(alpha: 0.3),
-      );
-    }
-
-    // Draw main route path
-    final routePath = Path()
-      ..moveTo(size.width * 0.5, size.height)
-      ..cubicTo(
-        size.width * 0.5,
-        size.height * 0.7,
-        size.width * 0.3,
-        size.height * 0.5,
-        size.width * 0.6,
-        size.height * 0.3,
-      )
-      ..cubicTo(
-        size.width * 0.8,
-        size.height * 0.15,
-        size.width * 0.7,
-        size.height * 0.05,
-        size.width * 0.5,
-        0,
-      );
-
-    canvas.drawPath(routePath, routePaint);
-
-    // Draw current position dot
-    final dotPaint = Paint()
-      ..color = AppTheme.mint
-      ..style = PaintingStyle.fill;
-
-    canvas.drawCircle(
-      Offset(size.width * 0.5, size.height * 0.65),
-      8,
-      dotPaint,
-    );
-
-    // Draw glow around position
-    final glowPaint = Paint()
-      ..color = AppTheme.mint.withValues(alpha: 0.3)
-      ..style = PaintingStyle.fill;
-
-    canvas.drawCircle(
-      Offset(size.width * 0.5, size.height * 0.65),
-      20,
-      glowPaint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}

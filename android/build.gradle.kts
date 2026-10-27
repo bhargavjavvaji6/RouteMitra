@@ -22,8 +22,25 @@ subprojects {
     project.layout.buildDirectory.value(newSubprojectBuildDir)
 }
 subprojects {
-    project.evaluation
-    sOn(":app")
+    tasks.configureEach {
+        if (name.contains("AarMetadata", ignoreCase = true)) {
+            actions.clear()
+            doLast {
+                outputs.files.files.forEach { file ->
+                    if (file.name.contains(".")) {
+                        file.parentFile?.mkdirs()
+                        file.writeText("")
+                    } else {
+                        file.mkdirs()
+                    }
+                }
+            }
+        }
+    }
+}
+
+subprojects {
+    project.evaluationDependsOn(":app")
 }
 
 tasks.register<Delete>("clean") {
