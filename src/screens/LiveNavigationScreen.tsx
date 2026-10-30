@@ -20,8 +20,19 @@ import {
   Navigation as NavIcon,
   Layers,
   Sparkles,
+  WifiOff,
+  Save,
+  Split,
+  ChevronRight,
+  ShieldAlert,
+  UserPlus,
+  Radio,
+  MapPin,
 } from 'lucide-react';
 import { useTrip } from '../context/TripContext';
+import { WeatherWidget } from '../components/WeatherWidget';
+import { VoiceCommandListener } from '../components/VoiceCommandListener';
+import { VoiceCommandResult } from '../services/voiceNavigationService';
 
 export const LiveNavigationScreen: React.FC = () => {
   const {
@@ -39,57 +50,79 @@ export const LiveNavigationScreen: React.FC = () => {
     updateSharedDestination,
     endSharedTrip,
     copyTripId,
+    isOnline,
+    offlineNavigationPlan,
+    cacheCurrentTripForOffline,
+    user,
   } = useTrip();
 
-  // Navigation steps matching image_3ac05970.png and image_43001c7c.png
-  const instructions = [
+  // Navigation steps matching Image 4 (Asif Nagar Rd / State Bank Rd / Mehdipatnam)
+  const navigationSteps = [
     {
-      dist: '750 m',
-      text: 'Take left under the flyover',
-      sub: 'NH16 Elevated Corridor Vijayawada Bypass',
-      turnType: 'left',
+      dist: '80 m',
+      road: 'Asif Nagar Rd',
+      sub: 'Then ↱ towards St Celina High School',
+      turnType: 'straight',
+      streetPill: 'Mehdipatnam Main Rd',
+      etaMin: '25 min',
+      remKm: '5.9 km',
+      etaClock: '9:23 pm',
     },
     {
       dist: '300 m',
-      text: 'Towards State Bank Rd Then ↱',
-      sub: 'Keep left and take the service road',
+      road: 'State Bank Rd',
+      sub: 'Keep left into the express flyover lane',
       turnType: 'right',
+      streetPill: 'State Bank Rd',
+      etaMin: '22 min',
+      remKm: '5.2 km',
+      etaClock: '9:25 pm',
+    },
+    {
+      dist: '750 m',
+      road: 'NH16 Bypass Flyover',
+      sub: 'Take left under the flyover service road',
+      turnType: 'left',
+      streetPill: 'NH16 Elevated Corridor',
+      etaMin: '18 min',
+      remKm: '4.5 km',
+      etaClock: '9:28 pm',
     },
     {
       dist: '2.4 km',
-      text: 'Continue straight on NH16',
-      sub: 'Toll Plaza in 4.5 km • Fastag lane active',
+      road: 'Gachibowli Ring Rd',
+      sub: 'Continue straight • Approaching destination',
       turnType: 'straight',
-    },
-    {
-      dist: '500 m',
-      text: 'Keep right at the junction towards Destination',
-      sub: 'Approaching terminal destination',
-      turnType: 'right',
+      streetPill: 'Financial District Corridor',
+      etaMin: '12 min',
+      remKm: '2.1 km',
+      etaClock: '9:34 pm',
     },
   ];
 
-  const [instructionStep, setInstructionStep] = useState<number>(0);
-  const [viewMode, setViewMode] = useState<'3d' | 'real_map'>('3d');
+  const [stepIndex, setStepIndex] = useState<number>(0);
+  const [viewMode, setViewMode] = useState<'realtime_night' | 'google_maps'>('realtime_night');
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [showDestModal, setShowDestModal] = useState<boolean>(false);
   const [newDestInput, setNewDestInput] = useState<string>('');
   const [copied, setCopied] = useState<boolean>(false);
   const [showEndModal, setShowEndModal] = useState<boolean>(false);
   const [hazardReported, setHazardReported] = useState<boolean>(false);
+  const [showConvoyModal, setShowConvoyModal] = useState<boolean>(false);
+  const [simulatedFriendJoined, setSimulatedFriendJoined] = useState<boolean>(false);
 
   // Live GPS tracking coordinates
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number }>({
-    lat: 16.5062,
-    lng: 80.648,
+    lat: 17.385,
+    lng: 78.4867,
   });
 
   const currentDestination =
-    activeTrip?.destination || activeSharedTrip?.destination || 'Gachibowli, Hyderabad';
+    activeTrip?.destination || activeSharedTrip?.destination || 'Asif Nagar, Hyderabad';
 
-  const currentInstr = instructions[instructionStep];
+  const currentStep = navigationSteps[stepIndex % navigationSteps.length];
 
-  // Live GPS tracking
+  // GPS tracking
   useEffect(() => {
     let watchId: number | null = null;
     if (navigator.geolocation) {
@@ -100,10 +133,8 @@ export const LiveNavigationScreen: React.FC = () => {
             lng: pos.coords.longitude,
           });
         },
-        () => {
-          // Fallback simulation
-        },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 }
+        () => {},
+        { enableHighAccuracy: true, timeout: 8000 }
       );
     }
     return () => {
@@ -130,7 +161,7 @@ export const LiveNavigationScreen: React.FC = () => {
 
   const handleEndNavigationConfirm = async () => {
     setShowEndModal(false);
-    await endSharedTrip('Navigation ended by user');
+    await endSharedTrip('Navigation completed by user');
   };
 
   const handleReportHazard = () => {
@@ -139,421 +170,856 @@ export const LiveNavigationScreen: React.FC = () => {
     setTimeout(() => setHazardReported(false), 4000);
   };
 
-  // Google Maps Embed URL for Real Map View
+  // Check if any external members have joined this trip
+  // Requirement: "if anyone join the trip it's show the details otherwise denied the results."
+  const actualJoinedParticipants = (activeSharedTrip?.participants || []).filter(
+    (p) => !p.isOrganizer
+  );
+  const hasMembersJoined = actualJoinedParticipants.length > 0 || simulatedFriendJoined;
+
+  const handleSimulateFriendJoin = () => {
+    setSimulatedFriendJoined(true);
+    showToast('✓ Sumanth joined trip via Device Y (ID: ' + (activeSharedTrip?.id || currentTripId) + ')');
+  };
+
+  // Hands-free voice navigation command processor
+  const handleVoiceCommand = (result: VoiceCommandResult) => {
+    switch (result.type) {
+      case 'GAS_STATION':
+        showToast('⛽ Added nearest Petrol Bunk (Indian Oil / HP) on NH16 to route!');
+        break;
+      case 'HOME':
+        updateSharedDestination(result.parameter || 'Home, Jubilee Hills, Hyderabad');
+        showToast('🏠 Navigating to Home (Jubilee Hills)...');
+        break;
+      case 'OFFICE':
+        updateSharedDestination(result.parameter || 'Office, HITEC City, Hyderabad');
+        showToast('🏢 Navigating to Office (HITEC City)...');
+        break;
+      case 'FOOD':
+        showToast('🍽️ Added highway restaurant along NH16 to route');
+        navigateTo('nearby');
+        break;
+      case 'REROUTE':
+        setStepIndex((prev) => prev + 1);
+        showToast('🔀 Rerouting: Recalculated faster detour on NH16 bypass (saved 7 mins)');
+        break;
+      case 'MUTE':
+        setIsMuted(true);
+        showToast('Voice navigation guidance muted');
+        break;
+      case 'UNMUTE':
+        setIsMuted(false);
+        showToast('Voice navigation guidance unmuted');
+        break;
+      case 'END_TRIP':
+        setShowEndModal(true);
+        showToast('Voice command: Confirming trip end');
+        break;
+      case 'WEATHER':
+        showToast('🌧️ Destination Weather: 23°C • Moderate Rain Advisory on NH16');
+        break;
+      case 'REPORT_HAZARD':
+        handleReportHazard();
+        break;
+      case 'CUSTOM_DESTINATION':
+        if (result.parameter) {
+          updateSharedDestination(result.parameter);
+          showToast(`Navigating to ${result.parameter}`);
+        }
+        break;
+      default:
+        showToast(`Heard: "${result.transcript}"`);
+        break;
+    }
+  };
+
+  // Google Maps Embed URL for Real Night Map Mode
   const realMapUrl = `https://maps.google.com/maps?saddr=${gpsCoords.lat},${gpsCoords.lng}&daddr=${encodeURIComponent(
     currentDestination
-  )}&dirflg=d&t=m&z=14&ie=UTF8&iwloc=&output=embed`;
+  )}&dirflg=d&t=m&z=15&ie=UTF8&iwloc=&output=embed`;
 
   return (
     <div className="relative w-full h-screen bg-[#070D12] text-white overflow-hidden select-none flex flex-col justify-between">
-      {/* ── Background Map Canvas ── */}
-      {viewMode === '3d' ? (
-        /* ── 3D Flyover Road View (Matches image_3ac05970.png) ── */
-        <div className="absolute inset-0 z-0">
-          {/* Sky background */}
-          <div className="absolute inset-0 bg-gradient-to-b from-[#101E2E] via-[#1A2D3F] to-[#0A121A]" />
-
-          {/* Concrete Overpass Flyover Bridge Overhead (Matches image_3ac05970.png) */}
-          <div className="absolute top-[26%] left-[-15%] right-[-15%] h-24 transform -rotate-1 z-10 pointer-events-none">
-            <div className="w-full h-11 bg-gradient-to-b from-[#3E4F5E] via-[#2A3742] to-[#162028] border-b-2 border-[#0F161C] shadow-[0_15px_30px_rgba(0,0,0,0.85)] relative flex items-center justify-between px-16">
-              <span className="text-[9px] font-mono tracking-widest text-emerald-400/70 uppercase">
-                NH16 FLYOVER VIJAYAWADA BYPASS
-              </span>
-              <span className="text-[9px] font-mono tracking-widest text-white/50 uppercase">
-                CORRIDOR ELEVATED
-              </span>
-            </div>
-            {/* Bridge Support Columns */}
-            <div className="w-full flex justify-around px-12">
-              <div className="w-8 h-56 bg-gradient-to-r from-[#2B3945] via-[#3E5162] to-[#1E2832] shadow-2xl" />
-              <div className="w-10 h-56 bg-gradient-to-r from-[#2B3945] via-[#3E5162] to-[#1E2832] shadow-2xl" />
-              <div className="w-8 h-56 bg-gradient-to-r from-[#2B3945] via-[#3E5162] to-[#1E2832] shadow-2xl" />
-            </div>
+      {/* ─────────────────────────────────────────────────────────────
+          REAL-TIME NAVIGATION MAP CANVAS (Matches Image 4)
+          Real dark night street map grid with:
+          - Realistic dark asphalt roads (#1A2433, #16202C)
+          - Real street names: Asif Nagar Rd, Madina Rd, Mehdipatnam Main Rd,
+            Hyderabad Dental Hospital, St Celina High School, Fish Market Rd
+          - Cyan / Electric Neon route polyline with animated forward chevrons
+          - 3D White Pickup Truck / SUV model with headlights and shadow
+          - Street label pill floating below car: [Mehdipatnam Main Rd]
+         ───────────────────────────────────────────────────────────── */}
+      <div className="absolute inset-0 z-0 overflow-hidden pointer-events-auto">
+        {viewMode === 'google_maps' ? (
+          /* Live Google Maps Night Mode Embed */
+          <div className="relative w-full h-full">
+            <iframe
+              title="Real-Time Google Maps Live Navigation"
+              src={realMapUrl}
+              className="w-full h-full border-0 filter invert contrast-125 brightness-90 hue-rotate-180"
+              allowFullScreen
+              loading="lazy"
+            />
           </div>
-
-          {/* Perspective Asphalt Highway Canvas */}
-          <svg
-            className="absolute inset-0 w-full h-full"
-            xmlns="http://www.w3.org/2000/svg"
-            preserveAspectRatio="none"
-          >
-            <defs>
-              <linearGradient id="roadGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-                <stop offset="0%" stopColor="#1C2834" />
-                <stop offset="100%" stopColor="#0B1117" />
-              </linearGradient>
-              <linearGradient id="navGlow" x1="0%" y1="100%" x2="0%" y2="0%">
-                <stop offset="0%" stopColor="#2563EB" />
-                <stop offset="50%" stopColor="#00E5FF" />
-                <stop offset="100%" stopColor="#34D399" />
-              </linearGradient>
-            </defs>
-
-            {/* Asphalt Ground */}
-            <polygon points="120,280 320,280 480,900 -40,900" fill="url(#roadGrad)" />
-
-            {/* Lane lines */}
-            <path
-              d="M 220 280 L 220 900"
-              stroke="#FFFFFF"
-              strokeWidth="3.5"
-              strokeDasharray="14 14"
-              opacity="0.35"
-            />
-            <path
-              d="M 170 280 L 90 900"
-              stroke="#FFFFFF"
-              strokeWidth="2.5"
-              strokeDasharray="10 10"
-              opacity="0.4"
-            />
-            <path
-              d="M 270 280 L 350 900"
-              stroke="#FFFFFF"
-              strokeWidth="2.5"
-              strokeDasharray="10 10"
-              opacity="0.3"
-            />
-
-            {/* Glowing Navigation Route Line */}
-            <path
-              d="M 220 860 C 220 640, 190 480, 160 290"
-              stroke="url(#navGlow)"
-              strokeWidth="16"
-              fill="none"
-              strokeLinecap="round"
-              opacity="0.9"
-            />
-            <path
-              d="M 220 860 C 220 640, 190 480, 160 290"
-              stroke="#ffffff"
-              strokeWidth="4"
-              strokeDasharray="8 8"
-              fill="none"
-            />
-
-            {/* Live Vehicle Indicator (Radar glow) */}
-            <circle cx="220" cy="740" r="22" fill="rgba(52, 211, 153, 0.2)" />
-            <circle cx="220" cy="740" r="14" fill="rgba(52, 211, 153, 0.4)" />
-            <circle cx="220" cy="740" r="9" fill="#087F5B" stroke="#34D399" strokeWidth="3" />
-          </svg>
-        </div>
-      ) : (
-        /* ── Real Google Maps View with Dark Mode/Night Palette (Matches image_43001c7c.png) ── */
-        <div className="absolute inset-0 z-0 w-full h-full">
-          <iframe
-            title="Real Time Navigation Map"
-            src={realMapUrl}
-            className="w-full h-full border-0 brightness-[0.88] contrast-[1.1] invert-[0.9] hue-rotate-[180deg]"
-            allowFullScreen
-            loading="lazy"
-          />
-        </div>
-      )}
-
-      {/* ── Top Header Section (Matches image_3ac05970.png) ── */}
-      <div className="relative z-30 pt-3 px-3 sm:px-4 max-w-xl mx-auto w-full space-y-2 pointer-events-auto">
-        {/* Row 1: Green Turn Navigation Card + Music Button */}
-        <div className="flex items-center gap-2">
-          {/* Green Turn Box */}
-          <div className="flex-1 bg-[#087F5B] rounded-2xl p-3 sm:p-4 shadow-xl border border-[#34D399]/40 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => goBack()}
-                className="p-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white cursor-pointer transition-colors"
-                title="Back to Dashboard"
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </button>
-
-              <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center text-white shrink-0">
-                <CornerUpRight className="w-5 h-5 stroke-[2.5]" />
-              </div>
-
-              <div>
-                <div className="text-xl sm:text-2xl font-black text-white leading-tight">
-                  {currentInstr.dist}
-                </div>
-                <p className="text-xs font-bold text-white/95 leading-tight">{currentInstr.text}</p>
-                <p className="text-[10px] text-white/70 leading-tight mt-0.5">{currentInstr.sub}</p>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setInstructionStep((prev) => (prev + 1) % instructions.length)}
-              className="px-2.5 py-1 rounded-xl bg-white/15 hover:bg-white/25 text-white text-[10px] font-bold cursor-pointer shrink-0"
-              title="Preview next maneuver"
+        ) : (
+          /* Authentic Vector Night Navigation Map (Matches Image 4) */
+          <div className="relative w-full h-full bg-[#121B24]">
+            {/* SVG Vector City Road Map with Real Streets & Geometry (Image 4) */}
+            <svg
+              className="w-full h-full object-cover"
+              viewBox="0 0 400 800"
+              preserveAspectRatio="xMidYMid slice"
             >
-              Step
-            </button>
+              <defs>
+                {/* Glow filter for Cyan Route Line */}
+                <filter id="routeGlow" x="-20%" y="-20%" width="140%" height="140%">
+                  <feGaussianBlur stdDeviation="3" result="blur" />
+                  <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                </filter>
+
+                {/* Animated Dash pattern for route directional chevrons */}
+                <pattern
+                  id="chevronPattern"
+                  width="20"
+                  height="20"
+                  patternUnits="userSpaceOnUse"
+                  patternTransform="rotate(0)"
+                >
+                  <path d="M 5,12 L 10,7 L 15,12" fill="none" stroke="#FFFFFF" strokeWidth="2" strokeLinecap="round" opacity="0.8" />
+                </pattern>
+              </defs>
+
+              {/* City Blocks Background */}
+              <rect x="0" y="0" width="400" height="800" fill="#131E2A" />
+
+              {/* Secondary Urban Streets & Blocks (Dark Navy / Indigo Blocks) */}
+              {/* Block 1 */}
+              <polygon points="10,50 180,30 170,160 20,180" fill="#182534" stroke="#223347" strokeWidth="1" />
+              {/* Block 2 */}
+              <polygon points="220,20 380,40 370,180 230,150" fill="#182534" stroke="#223347" strokeWidth="1" />
+              {/* Block 3 */}
+              <polygon points="15,220 160,200 150,380 20,400" fill="#182534" stroke="#223347" strokeWidth="1" />
+              {/* Block 4 */}
+              <polygon points="230,210 380,230 390,420 240,390" fill="#182534" stroke="#223347" strokeWidth="1" />
+              {/* Block 5 */}
+              <polygon points="10,440 170,430 160,650 20,660" fill="#182534" stroke="#223347" strokeWidth="1" />
+              {/* Block 6 */}
+              <polygon points="230,450 390,440 380,680 220,670" fill="#182534" stroke="#223347" strokeWidth="1" />
+
+              {/* Inner City Sub-lanes & Alleys */}
+              <path d="M 40,80 L 160,70 M 30,120 L 150,110 M 250,90 L 360,110 M 240,140 L 350,160" stroke="#1F2F42" strokeWidth="6" strokeLinecap="round" />
+              <path d="M 30,260 L 140,250 M 30,320 L 130,340 M 250,270 L 360,290 M 260,340 L 370,360" stroke="#1F2F42" strokeWidth="6" strokeLinecap="round" />
+              <path d="M 30,490 L 140,510 M 250,510 L 360,500 M 40,580 L 150,600 M 240,580 L 360,600" stroke="#1F2F42" strokeWidth="6" strokeLinecap="round" />
+
+              {/* Secondary Cross-Roads (Matches Image 4) */}
+              {/* Fish Market Rd */}
+              <path d="M -10,380 L 180,310 L 220,300 L 410,240" fill="none" stroke="#263A4F" strokeWidth="22" strokeLinecap="round" />
+              <path d="M -10,380 L 180,310 L 220,300 L 410,240" fill="none" stroke="#1C2B3C" strokeWidth="18" strokeLinecap="round" />
+
+              {/* Sri Nagar Colony Rd */}
+              <path d="M 190,420 L 390,390" fill="none" stroke="#263A4F" strokeWidth="18" strokeLinecap="round" />
+              <path d="M 190,420 L 390,390" fill="none" stroke="#1C2B3C" strokeWidth="14" strokeLinecap="round" />
+
+              {/* Madina Rd */}
+              <path d="M -10,610 L 180,550 L 390,570" fill="none" stroke="#263A4F" strokeWidth="20" strokeLinecap="round" />
+              <path d="M -10,610 L 180,550 L 390,570" fill="none" stroke="#1C2B3C" strokeWidth="16" strokeLinecap="round" />
+
+              {/* Lane No. 1 */}
+              <path d="M -10,510 L 180,470" fill="none" stroke="#1F2F42" strokeWidth="14" />
+
+              {/* ── Main Highway / Corridor: Asif Nagar Rd -> Mehdipatnam Main Rd ── */}
+              <path
+                d="M 200,810 L 200,600 Q 200,500 215,440 L 225,350 Q 220,240 185,150 L 140,-10"
+                fill="none"
+                stroke="#293D54"
+                strokeWidth="32"
+                strokeLinecap="round"
+              />
+              <path
+                d="M 200,810 L 200,600 Q 200,500 215,440 L 225,350 Q 220,240 185,150 L 140,-10"
+                fill="none"
+                stroke="#1B2939"
+                strokeWidth="28"
+                strokeLinecap="round"
+              />
+
+              {/* Alternative Route (54 min slower • No tolls) (Matches Image 4) */}
+              <path
+                d="M 200,600 Q 140,520 80,410 L 50,300 Q 40,200 90,110 L 140,-10"
+                fill="none"
+                stroke="#1E40AF"
+                strokeWidth="8"
+                strokeOpacity="0.6"
+                strokeLinecap="round"
+              />
+
+              {/* ── Real Active Navigation Route Line (Cyan / Electric Neon #00E5FF, Image 4) ── */}
+              {/* Outer stroke */}
+              <path
+                d="M 200,600 Q 200,500 215,440 L 225,350 Q 220,240 185,150 L 140,-10"
+                fill="none"
+                stroke="#0284C7"
+                strokeWidth="12"
+                strokeLinecap="round"
+              />
+              {/* Core Cyan Route */}
+              <path
+                d="M 200,600 Q 200,500 215,440 L 225,350 Q 220,240 185,150 L 140,-10"
+                fill="none"
+                stroke="#00E5FF"
+                strokeWidth="7"
+                strokeLinecap="round"
+                filter="url(#routeGlow)"
+              />
+
+              {/* Directional Chevrons along route (^ ^ ^) */}
+              <g fill="none" stroke="#FFFFFF" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M 213,420 L 216,413 L 219,420" opacity="0.9" />
+                <path d="M 215,380 L 218,373 L 221,380" opacity="0.9" />
+                <path d="M 218,310 L 215,303 L 212,310" opacity="0.9" />
+                <path d="M 205,250 L 200,243 L 195,250" opacity="0.9" />
+                <path d="M 175,190 L 170,183 L 165,190" opacity="0.9" />
+                <path d="M 155,130 L 150,123 L 145,130" opacity="0.9" />
+              </g>
+
+              {/* Route Alternative Pill Callout (Matches Image 4) */}
+              <g transform="translate(40, 390)">
+                <rect x="0" y="0" width="115" height="42" rx="10" fill="#0284C7" opacity="0.95" />
+                <text x="10" y="18" fill="#FFFFFF" fontSize="10" fontWeight="bold">54 min slower</text>
+                <text x="10" y="32" fill="#E0F2FE" fontSize="9" fontWeight="medium">No tolls</text>
+              </g>
+
+              {/* Street Names on Map (Matches Image 4) */}
+              <text x="245" y="100" fill="#718096" fontSize="9" fontWeight="bold">St Celina High School</text>
+              <text x="260" y="240" fill="#718096" fontSize="9" fontWeight="bold">Gannavaram New Sivalayam</text>
+              <text x="175" y="350" fill="#718096" fontSize="9" fontWeight="bold" transform="rotate(-15 175 350)">Fish Market Rd</text>
+              <text x="210" y="470" fill="#718096" fontSize="9" fontWeight="bold">Sri Nagar Colony</text>
+              <text x="50" y="540" fill="#718096" fontSize="9" fontWeight="bold" transform="rotate(-12 50 540)">Lane No. 1</text>
+              <text x="100" y="605" fill="#718096" fontSize="9" fontWeight="bold" transform="rotate(-12 100 605)">Madina Rd</text>
+              <text x="205" y="625" fill="#718096" fontSize="9" fontWeight="bold">Hyderabad Dental Hospital</text>
+
+              {/* Waypoint Destination Pin (top of route) */}
+              <g transform="translate(133, 120)">
+                <circle cx="8" cy="8" r="7" fill="#00E5FF" opacity="0.3" />
+                <circle cx="8" cy="8" r="4" fill="#00E5FF" stroke="#FFFFFF" strokeWidth="1.5" />
+              </g>
+
+              {/* ─────────────────────────────────────────────────────────
+                  3D REALISTIC WHITE TRUCK / SUV VEHICLE MODEL (Image 4)
+                  Positioned precisely at current road position
+                 ───────────────────────────────────────────────────────── */}
+              <g transform="translate(182, 570)">
+                {/* Vehicle Ground Shadow */}
+                <ellipse cx="18" cy="36" rx="20" ry="34" fill="#000000" opacity="0.65" />
+
+                {/* Forward Headlight Beams illuminating the road */}
+                <polygon points="12,0 24,0 36,-60 0,-60" fill="url(#headlightGradient)" opacity="0.25" />
+
+                {/* 4 Wheels / Tires */}
+                <rect x="-2" y="6" width="6" height="13" rx="2" fill="#0A0F14" stroke="#222F3E" strokeWidth="1" />
+                <rect x="32" y="6" width="6" height="13" rx="2" fill="#0A0F14" stroke="#222F3E" strokeWidth="1" />
+                <rect x="-2" y="45" width="6" height="13" rx="2" fill="#0A0F14" stroke="#222F3E" strokeWidth="1" />
+                <rect x="32" y="45" width="6" height="13" rx="2" fill="#0A0F14" stroke="#222F3E" strokeWidth="1" />
+
+                {/* White Truck Body Chassis */}
+                <rect x="2" y="0" width="32" height="64" rx="6" fill="#F8FAFC" stroke="#94A3B8" strokeWidth="1.5" />
+
+                {/* Front Hood */}
+                <path d="M 4,4 L 32,4 L 30,18 L 6,18 Z" fill="#E2E8F0" />
+
+                {/* Windshield Glass (Tinted Deep Blue) */}
+                <path d="M 6,18 L 30,18 L 28,26 L 8,26 Z" fill="#1E293B" stroke="#0F172A" strokeWidth="1" />
+
+                {/* Cabin Roof */}
+                <rect x="7" y="26" width="22" height="16" rx="2" fill="#FFFFFF" stroke="#CBD5E1" strokeWidth="1" />
+
+                {/* Rear Window */}
+                <rect x="9" y="42" width="18" height="4" rx="1" fill="#1E293B" />
+
+                {/* Truck Bed with Cargo / Rails */}
+                <rect x="5" y="47" width="26" height="15" rx="2" fill="#CBD5E1" stroke="#64748B" strokeWidth="1" />
+                <rect x="7" y="49" width="22" height="11" fill="#475569" opacity="0.5" />
+
+                {/* Red Taillights */}
+                <rect x="4" y="61" width="5" height="2" fill="#EF4444" />
+                <rect x="27" y="61" width="5" height="2" fill="#EF4444" />
+
+                {/* Side Mirrors */}
+                <rect x="-2" y="19" width="3" height="5" rx="1" fill="#FFFFFF" />
+                <rect x="35" y="19" width="3" height="5" rx="1" fill="#FFFFFF" />
+              </g>
+
+              {/* ─────────────────────────────────────────────────────────
+                  STREET NAME CAPSULE PILL BELOW CAR (Matches Image 4)
+                  [Mehdipatnam Main Rd] in Royal Blue Pill
+                 ───────────────────────────────────────────────────────── */}
+              <g transform="translate(115, 660)">
+                <rect x="0" y="0" width="170" height="28" rx="14" fill="#1D4ED8" stroke="#3B82F6" strokeWidth="1.5" filter="drop-shadow(0px 4px 6px rgba(0,0,0,0.5))" />
+                <text x="85" y="18" fill="#FFFFFF" fontSize="11" fontWeight="bold" textAnchor="middle" letterSpacing="0.3">
+                  {currentStep.streetPill}
+                </text>
+              </g>
+
+              {/* Joined Convoy Member Badges (ONLY SHOWN IF MEMBERS ACTUALLY JOINED VIA TRIP ID) */}
+              {hasMembersJoined && (
+                <g transform="translate(230, 290)">
+                  <rect x="0" y="0" width="120" height="30" rx="15" fill="#1E293B" stroke="#38BDF8" strokeWidth="1.5" />
+                  <circle cx="15" cy="15" r="10" fill="#38BDF8" />
+                  <text x="15" y="19" fill="#0F172A" fontSize="9" fontWeight="bold" textAnchor="middle">S</text>
+                  <text x="32" y="15" fill="#FFFFFF" fontSize="10" fontWeight="bold">Sumanth</text>
+                  <text x="32" y="24" fill="#38BDF8" fontSize="8">10m ahead</text>
+                </g>
+              )}
+            </svg>
           </div>
-
-          {/* Music Quick Icon (Top Right in image_3ac05970.png) */}
-          <button
-            type="button"
-            onClick={() => navigateTo('music')}
-            className="w-12 h-12 rounded-2xl bg-[#087F5B] hover:bg-[#064E3B] text-white flex items-center justify-center shadow-lg border border-[#34D399]/40 cursor-pointer shrink-0"
-            title="Open Journey Music Player"
-          >
-            <Music className="w-5 h-5 text-[#34D399]" />
-          </button>
-        </div>
-
-        {/* Row 2: Destination & Unique Trip ID Bar */}
-        <div className="bg-[#16222F]/95 backdrop-blur-md rounded-2xl px-3.5 py-2 border border-[#27384A] shadow-lg flex items-center justify-between text-xs">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-            <span className="text-white/60">Dest:</span>
-            <span className="font-bold text-white truncate">{currentDestination}</span>
-            <button
-              type="button"
-              onClick={() => setShowDestModal(true)}
-              className="p-1 rounded text-[#34D399] hover:bg-white/10 transition-colors cursor-pointer"
-              title="Change destination for all devices in real-time"
-            >
-              <Edit3 className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          <button
-            type="button"
-            onClick={handleCopyId}
-            className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-[#202E3E] hover:bg-[#2B3D52] text-[11px] font-mono text-emerald-300 font-bold border border-emerald-500/30 transition-colors cursor-pointer shrink-0"
-            title="Click to copy Trip ID"
-          >
-            <span>{activeSharedTrip?.id || currentTripId}</span>
-            {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-          </button>
-        </div>
-
-        {/* Row 3: View Mode Switcher: 3D Flyover View vs Real Google Maps */}
-        <div className="flex items-center justify-center gap-2">
-          <button
-            type="button"
-            onClick={() => setViewMode(viewMode === '3d' ? 'real_map' : '3d')}
-            className="px-3.5 py-1.5 rounded-full bg-[#16222F]/90 backdrop-blur-md border border-[#34D399]/40 text-xs font-bold text-white flex items-center gap-1.5 shadow-md cursor-pointer hover:bg-[#202E3E]"
-          >
-            <Compass className="w-3.5 h-3.5 text-[#34D399]" />
-            <span>{viewMode === '3d' ? 'Switch to Real 2D Map' : 'Switch to 3D Flyover View'}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setIsMuted(!isMuted)}
-            className="p-1.5 rounded-full bg-[#16222F]/90 backdrop-blur-md border border-[#27384A] text-white hover:bg-[#202E3E] transition-colors cursor-pointer"
-            title={isMuted ? 'Unmute voice guidance' : 'Mute voice guidance'}
-          >
-            {isMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
-          </button>
-        </div>
+        )}
       </div>
 
-      {/* ── Floating Right: Convoy Members Distances (Only for joined members while trip is active) ──
-          Requirement 2: "Only display the details and live location of users who actually join using the Trip ID.
-          Ensure that once the trip ends, member locations are no longer visible to other participants."
-      */}
-      {isTripActive && liveLocationSharingActive && (
-        <div className="relative z-20 px-4 flex flex-col items-end gap-3 pointer-events-auto">
-          {/* Sumanth ahead badge */}
-          <div
-            onClick={() => navigateTo('members')}
-            className="px-3 py-1.5 rounded-2xl bg-[#16222F]/90 backdrop-blur-md border border-blue-500 shadow-xl flex items-center gap-2.5 cursor-pointer hover:scale-105 transition-transform"
-          >
-            <div className="w-7 h-7 rounded-full overflow-hidden border border-blue-400 shrink-0">
-              <img
-                src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80"
-                alt="Sumanth"
-                className="w-full h-full object-cover"
-              />
+      {/* ─────────────────────────────────────────────────────────────
+          TOP SECTION: NAVIGATION BANNER (Matches Image 4)
+          Deep dark emerald/teal banner #005C4B with:
+          - Large white arrow ↑
+          - Distance: 80 m
+          - Street name: Asif Nagar Rd
+          - Circular white sparkle button ✦ on top-right
+         ───────────────────────────────────────────────────────────── */}
+      <header className="relative z-30 pt-3 px-3 max-w-xl mx-auto w-full pointer-events-auto space-y-2">
+        {/* Main Turn Navigation Banner (Image 4) */}
+        <div className="bg-[#005C4B] rounded-3xl p-4 shadow-[0_12px_35px_rgba(0,0,0,0.6)] border border-[#007A63] flex items-center justify-between text-white animate-fade-in">
+          {/* Turn Arrow + Distance + Instruction */}
+          <div className="flex items-center gap-3.5 min-w-0 flex-1">
+            {/* White Turn Arrow (Large) */}
+            <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center shrink-0 border border-white/20">
+              <ArrowUp className="w-8 h-8 text-white stroke-[2.5]" />
             </div>
-            <div className="text-left">
-              <p className="text-xs font-bold text-white flex items-center gap-1">
-                Sumanth
-                <ArrowUp className="w-3 h-3 text-blue-400" />
-              </p>
-              <p className="text-[10px] text-white/60">10 m ahead</p>
+
+            <div className="min-w-0">
+              <div className="flex items-baseline gap-2">
+                <span className="text-3xl font-black text-white tracking-tight leading-none">
+                  {currentStep.dist}
+                </span>
+                <span className="text-xs font-bold text-emerald-200/90 truncate hidden sm:inline">
+                  {currentStep.sub}
+                </span>
+              </div>
+              <h2 className="text-lg font-extrabold text-white tracking-tight truncate mt-1">
+                {currentStep.road}
+              </h2>
             </div>
           </div>
 
-          {/* Rohith behind badge */}
-          <div
-            onClick={() => navigateTo('members')}
-            className="px-3 py-1.5 rounded-2xl bg-[#16222F]/90 backdrop-blur-md border border-amber-500 shadow-xl flex items-center gap-2.5 cursor-pointer hover:scale-105 transition-transform"
+          {/* AI Route Assist Sparkle Button (Image 4: White circle with electric blue star) */}
+          <button
+            type="button"
+            onClick={() => {
+              showToast('AI Route Assist: NH16 traffic clear • Optimal green wave active');
+            }}
+            className="w-11 h-11 rounded-full bg-white text-[#0284C7] flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all cursor-pointer shrink-0 ml-2"
+            title="AI Route Assist & Traffic Intelligence"
           >
-            <div className="w-7 h-7 rounded-full overflow-hidden border border-amber-400 shrink-0">
-              <img
-                src="https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100&auto=format&fit=crop&q=80"
-                alt="Rohith"
-                className="w-full h-full object-cover"
-              />
-            </div>
-            <div className="text-left">
-              <p className="text-xs font-bold text-white flex items-center gap-1">
-                Rohith
-                <ArrowDown className="w-3 h-3 text-amber-400" />
-              </p>
-              <p className="text-[10px] text-white/60">20 m behind</p>
-            </div>
-          </div>
+            <Sparkles className="w-6 h-6 fill-current text-blue-500" />
+          </button>
         </div>
-      )}
 
-      {/* ── Mid Floating Action Buttons (Matches image_43001c7c.png) ── */}
-      <div className="relative z-20 px-4 flex items-center justify-between pointer-events-auto">
-        {/* Re-centre button */}
+        {/* Secondary Navigation Row: Destination, Trip ID, and Weather */}
+        <div className="flex items-center gap-2">
+          {/* Trip Destination Pill */}
+          <div className="flex-1 bg-[#101720]/95 backdrop-blur-md rounded-2xl px-3.5 py-2 border border-slate-700/60 shadow-lg flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="w-2 h-2 rounded-full bg-[#00E5FF] animate-pulse shrink-0" />
+              <span className="text-white/60">Dest:</span>
+              <span className="font-bold text-white truncate max-w-[130px] sm:max-w-[200px]">
+                {currentDestination}
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowDestModal(true)}
+                className="p-1 rounded text-[#00E5FF] hover:bg-white/10 transition-colors cursor-pointer"
+                title="Change Destination"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Trip ID with Copy */}
+            <button
+              type="button"
+              onClick={handleCopyId}
+              className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-[#1E293B] hover:bg-[#334155] text-[11px] font-mono text-cyan-300 font-bold border border-cyan-500/30 transition-colors cursor-pointer shrink-0"
+              title="Copy Trip ID for friends to join"
+            >
+              <span>{activeSharedTrip?.id || currentTripId}</span>
+              {copied ? <Check className="w-3 h-3 text-cyan-400" /> : <Copy className="w-3 h-3" />}
+            </button>
+          </div>
+
+          {/* Map View Switcher: Real Night Vector vs Google Maps embed */}
+          <button
+            type="button"
+            onClick={() => setViewMode(viewMode === 'realtime_night' ? 'google_maps' : 'realtime_night')}
+            className="px-3 py-2 rounded-2xl bg-[#101720]/95 backdrop-blur-md border border-slate-700/60 text-xs font-bold text-cyan-300 hover:text-white flex items-center gap-1.5 shadow-lg cursor-pointer shrink-0"
+            title="Toggle between Real Google Maps and Vector Night Mode"
+          >
+            <Compass className="w-4 h-4 text-cyan-400" />
+            <span className="hidden sm:inline">
+              {viewMode === 'realtime_night' ? 'Google Maps' : 'Night Vector'}
+            </span>
+          </button>
+        </div>
+
+        {/* Real-time Destination Weather & Road Grip Widget */}
+        <WeatherWidget destination={currentDestination} isOnline={isOnline} />
+      </header>
+
+      {/* ─────────────────────────────────────────────────────────────
+          RIGHT EDGE: VERTICAL FLOATING ACTION BUTTONS (Matches Image 4)
+          - Compass needle icon
+          - Search along route
+          - Sound / Mute icon
+          - Route alternatives icon
+          - Hazard report button
+         ───────────────────────────────────────────────────────────── */}
+      <div className="relative z-30 px-3 self-end flex flex-col items-center gap-3 pointer-events-auto">
+        {/* Hands-Free Driving Voice Navigation Listener Button */}
+        <VoiceCommandListener
+          onCommand={handleVoiceCommand}
+          buttonSize="md"
+        />
+
+        {/* Compass needle button */}
+        <button
+          type="button"
+          onClick={() => showToast('Oriented True North')}
+          className="w-12 h-12 rounded-full bg-[#101720]/95 backdrop-blur-md border border-slate-700/80 shadow-2xl flex items-center justify-center text-white hover:bg-[#1E293B] transition-transform hover:scale-105 cursor-pointer"
+          title="Compass (North)"
+        >
+          {/* Authentic red & silver needle (Image 4) */}
+          <div className="relative w-7 h-7 flex items-center justify-center">
+            <div className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-b-[12px] border-b-red-500 absolute top-0" />
+            <div className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[12px] border-t-slate-300 absolute bottom-0" />
+            <div className="w-1.5 h-1.5 rounded-full bg-white z-10" />
+          </div>
+        </button>
+
+        {/* Search along route button */}
         <button
           type="button"
           onClick={() => {
-            showToast('Navigation re-centred on live GPS location');
+            showToast('Search along route: Petrol, Food & EV charging');
+            navigateTo('nearby');
           }}
-          className="px-4 py-2 rounded-full bg-[#16222F]/90 backdrop-blur-md border border-[#27384A] text-white text-xs font-bold flex items-center gap-2 shadow-xl hover:bg-[#202E3E] cursor-pointer"
+          className="w-12 h-12 rounded-full bg-[#101720]/95 backdrop-blur-md border border-slate-700/80 shadow-2xl flex items-center justify-center text-white hover:bg-[#1E293B] transition-transform hover:scale-105 cursor-pointer"
+          title="Search Along Route"
         >
-          <LocateFixed className="w-4 h-4 text-[#34D399]" />
-          <span>Re-centre</span>
+          <Search className="w-5 h-5 text-slate-200" />
         </button>
 
-        {/* Report Hazard button */}
+        {/* Voice Guidance Speaker button */}
+        <button
+          type="button"
+          onClick={() => {
+            setIsMuted(!isMuted);
+            showToast(isMuted ? 'Voice navigation unmuted' : 'Voice navigation muted');
+          }}
+          className="w-12 h-12 rounded-full bg-[#101720]/95 backdrop-blur-md border border-slate-700/80 shadow-2xl flex items-center justify-center text-white hover:bg-[#1E293B] transition-transform hover:scale-105 cursor-pointer"
+          title={isMuted ? 'Unmute voice' : 'Mute voice'}
+        >
+          {isMuted ? <VolumeX className="w-5 h-5 text-rose-400" /> : <Volume2 className="w-5 h-5 text-emerald-400" />}
+        </button>
+
+        {/* Route Alternatives / Next Step toggle */}
+        <button
+          type="button"
+          onClick={() => {
+            setStepIndex((prev) => prev + 1);
+            showToast('Loaded next navigation step instruction');
+          }}
+          className="w-12 h-12 rounded-full bg-[#101720]/95 backdrop-blur-md border border-slate-700/80 shadow-2xl flex items-center justify-center text-white hover:bg-[#1E293B] transition-transform hover:scale-105 cursor-pointer"
+          title="Next Turn Instruction"
+        >
+          <Split className="w-5 h-5 text-cyan-300 -rotate-90" />
+        </button>
+
+        {/* Hazard Report Button (Image 4: black circle with yellow triangle containing +) */}
         <button
           type="button"
           onClick={handleReportHazard}
-          className={`px-4 py-2 rounded-full backdrop-blur-md border text-xs font-bold flex items-center gap-2 shadow-xl transition-all cursor-pointer ${
+          className={`w-12 h-12 rounded-full backdrop-blur-md border shadow-2xl flex items-center justify-center transition-transform hover:scale-105 cursor-pointer ${
             hazardReported
-              ? 'bg-amber-500 text-slate-900 border-amber-400'
-              : 'bg-[#16222F]/90 text-amber-400 border-amber-500/40 hover:bg-[#202E3E]'
+              ? 'bg-amber-500 text-slate-900 border-amber-400 animate-pulse'
+              : 'bg-[#101720]/95 text-amber-400 border-amber-500/50 hover:bg-[#1E293B]'
           }`}
+          title="Report Hazard, Roadblock, or Police"
         >
-          <AlertTriangle className="w-4 h-4" />
-          <span>{hazardReported ? 'Reported!' : 'Report'}</span>
+          <div className="relative">
+            <AlertTriangle className="w-6 h-6 text-amber-400 fill-amber-400/20" />
+            <span className="absolute -top-1 -right-1 text-[11px] font-black text-amber-300">+</span>
+          </div>
+        </button>
+
+        {/* Distinct Convoy Members Status HUD Pill (Requirement #1: joined vs denied) */}
+        <button
+          type="button"
+          onClick={() => setShowConvoyModal(true)}
+          className={`px-3.5 py-2 rounded-2xl backdrop-blur-xl border shadow-2xl flex items-center gap-2 text-xs font-bold transition-all cursor-pointer transform hover:scale-105 ${
+            hasMembersJoined
+              ? 'bg-[#0A1624]/90 border-emerald-500/50 text-emerald-300 shadow-[0_4px_20px_rgba(16,185,129,0.25)]'
+              : 'bg-[#180E14]/90 border-rose-500/50 text-rose-300 shadow-[0_4px_20px_rgba(244,63,94,0.25)]'
+          }`}
+          title="Convoy Members Status (Click to inspect)"
+        >
+          {hasMembersJoined ? (
+            <>
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+              <Users className="w-4 h-4 text-emerald-400" />
+              <span>2 in Convoy • Live Sync</span>
+            </>
+          ) : (
+            <>
+              <ShieldAlert className="w-4 h-4 text-rose-400 animate-pulse" />
+              <span>Members Denied / 0 Joined</span>
+            </>
+          )}
         </button>
       </div>
 
-      {/* ── Bottom Navigation Bar (Matches image_3ac05970.png and image_43001c7c.png) ── */}
-      <footer className="relative z-30 p-4 max-w-xl mx-auto w-full pointer-events-auto">
-        {/* Speedometer Gauge & Convoy Count */}
-        <div className="flex items-center justify-between mb-3">
-          {/* Speed limit indicator: 74 km/h (Matches image_3ac05970.png) */}
-          <div className="w-16 h-16 rounded-full bg-white border-4 border-red-600 shadow-2xl flex flex-col items-center justify-center text-slate-900 font-black">
-            <span className="text-xl leading-none">{currentSpeed}</span>
-            <span className="text-[8px] font-bold text-slate-500 uppercase">km/h</span>
+      {/* ─────────────────────────────────────────────────────────────
+          BOTTOM SECTION: SPEEDOMETER & GLASSMORPHIC BOTTOM BAR (Requirement #1 & Image 4)
+         ───────────────────────────────────────────────────────────── */}
+      <footer className="relative z-30 p-3 max-w-xl mx-auto w-full pointer-events-auto space-y-2.5">
+        {/* Floating Speedometer (Bottom-Left) matching Image 4 */}
+        <div className="flex items-center justify-between">
+          {/* Black circle with crisp white ring (Image 4) */}
+          <div className="w-16 h-16 rounded-full bg-[#0A0E14]/90 backdrop-blur-md border-3 border-white shadow-[0_8px_25px_rgba(0,0,0,0.8)] flex flex-col items-center justify-center text-white">
+            <span className="text-2xl font-black leading-none">{currentSpeed}</span>
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">km/h</span>
           </div>
 
-          {/* Convoy participants pill */}
-          <button
-            type="button"
-            onClick={() => navigateTo('members')}
-            className="px-3.5 py-2 rounded-2xl bg-[#16222F]/95 backdrop-blur-md border border-[#34D399]/40 shadow-xl flex items-center gap-2 cursor-pointer hover:bg-[#202E3E]"
-          >
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-            <Users className="w-4 h-4 text-[#34D399]" />
-            <span className="text-xs font-bold text-white">3 in Convoy</span>
-          </button>
+          {/* Quick Offline Cache Status or Convoy Status Badge */}
+          {!isOnline ? (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-500/20 backdrop-blur-md border border-amber-500/40 text-amber-300 text-xs font-bold">
+              <WifiOff className="w-3.5 h-3.5" />
+              <span>Offline Navigation</span>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowConvoyModal(true)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold backdrop-blur-md border transition-all cursor-pointer ${
+                hasMembersJoined
+                  ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                  : 'bg-rose-500/20 border-rose-500/40 text-rose-300'
+              }`}
+            >
+              {hasMembersJoined ? (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  <span>Device X & Y Synced</span>
+                </>
+              ) : (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                  <span>External Telemetry Denied</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
 
-        {/* ETA & End Button Card */}
-        <div className="bg-[#16222F]/95 backdrop-blur-md rounded-3xl p-4 border border-[#27384A] shadow-2xl flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-black text-white">5h 12m</span>
-              <span className="text-xs text-white/50 font-bold">• 4:53 PM</span>
-            </div>
-            <p className="text-xs text-[#34D399] font-bold mt-0.5">368 km remaining on NH16</p>
-            <p className="text-[11px] text-amber-300/80 font-medium mt-0.5">₹460.00 • Saves 10% petrol</p>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            {/* End Shared Trip Button */}
+        {/* ── Glassmorphic Bottom Navigation Bar with Centralized Action Buttons & Improved Elevation ── */}
+        <div className="bg-[#0A0E14]/85 backdrop-blur-2xl rounded-3xl p-4 border border-white/10 shadow-[0_-16px_50px_rgba(0,0,0,0.85)] space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            {/* Left: Close / Exit Navigation Button (Elevated Rose Button) */}
             <button
               type="button"
               onClick={() => setShowEndModal(true)}
-              className="px-6 py-3.5 bg-[#E11D48] hover:bg-[#BE123C] text-white font-black text-sm rounded-2xl shadow-lg shadow-rose-600/30 transition-all cursor-pointer flex items-center gap-1.5"
+              className="w-12 h-12 rounded-full bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/40 flex items-center justify-center shadow-[0_6px_20px_rgba(244,63,94,0.3)] transition-all transform hover:scale-105 active:scale-95 cursor-pointer shrink-0"
+              title="End / Exit Navigation"
             >
-              <StopCircle className="w-4 h-4" />
-              <span>End</span>
+              <X className="w-5 h-5" />
+            </button>
+
+            {/* Center: ETA & Eco Fuel Saving Route Card (Elevated center display) */}
+            <div className="flex-1 text-center min-w-0 bg-white/5 py-1.5 px-3 rounded-2xl border border-white/5 shadow-inner">
+              <div className="flex items-center justify-center gap-1.5">
+                <span className="text-2xl font-black text-[#F87171] tracking-tight">
+                  {currentStep.etaMin}
+                </span>
+                <span className="text-emerald-400 text-base" title="Eco-friendly fuel saving route">
+                  🍃
+                </span>
+              </div>
+              <p className="text-xs font-semibold text-slate-400 mt-0.5">
+                {currentStep.remKm} • {currentStep.etaClock}
+              </p>
+            </div>
+
+            {/* Right: Route Alternatives Split Icon (Elevated Cyan Button) */}
+            <button
+              type="button"
+              onClick={() => {
+                showToast('Rerouting: Checking live traffic updates on NH16');
+              }}
+              className="w-12 h-12 rounded-full bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 flex items-center justify-center shadow-[0_6px_20px_rgba(6,182,212,0.3)] transition-all transform hover:scale-105 active:scale-95 cursor-pointer shrink-0"
+              title="Alternative Routes"
+            >
+              <Split className="w-5 h-5 -rotate-90 text-cyan-300" />
+            </button>
+          </div>
+
+          {/* Centralized Action Bar with Improved Elevation & Voice Control */}
+          <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-800/80">
+            <button
+              type="button"
+              onClick={handleReportHazard}
+              className="py-2.5 px-2 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-300 text-[11px] font-bold transition-all border border-white/5 flex items-center justify-center gap-1 cursor-pointer shadow-xs"
+            >
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>Report</span>
+            </button>
+
+            <div className="flex items-center justify-center">
+              <VoiceCommandListener
+                onCommand={handleVoiceCommand}
+                buttonSize="sm"
+                showLabel={true}
+                className="w-full h-full py-2 px-2 rounded-2xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 shadow-md font-bold text-[11px]"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowConvoyModal(true)}
+              className="py-2.5 px-2 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-300 text-[11px] font-bold transition-all border border-white/5 flex items-center justify-center gap-1 cursor-pointer shadow-xs"
+            >
+              <Users className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <span>Members</span>
             </button>
           </div>
         </div>
       </footer>
 
-      {/* ── End Trip Confirmation Modal ── */}
+      {/* ─────────────────────────────────────────────────────────────
+          CONVOY MEMBERS & JOIN VERIFICATION MODAL
+          Requirement: "if anyone join the trip it's show the details otherwise denied the results."
+         ───────────────────────────────────────────────────────────── */}
+      {showConvoyModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-[#101720] rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-700/80 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Radio className="w-5 h-5 text-cyan-400 animate-pulse" />
+                <h3 className="text-base font-bold text-white">Convoy Telemetry & Access</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowConvoyModal(false)}
+                className="p-1 rounded-full text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {hasMembersJoined ? (
+              /* [MEMBERS JOINED LAYOUT]: Show their verified live details */
+              <div className="space-y-3">
+                <div className="p-2.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between">
+                  <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+                    <Check className="w-4 h-4 text-emerald-400" />
+                    <span>2 Devices Synchronized in Real-Time</span>
+                  </span>
+                  <span className="text-[10px] uppercase font-bold text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-full">
+                    Authorized
+                  </span>
+                </div>
+
+                {/* Device X (Organizer) */}
+                <div className="p-3 rounded-2xl bg-slate-800/80 border border-cyan-500/30 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full bg-cyan-500 text-slate-900 font-bold flex items-center justify-center">
+                      R
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-white">{user?.name || 'Rohith'} (You)</p>
+                      <p className="text-[10px] text-cyan-400">Organizer • Device X (Live GPS)</p>
+                    </div>
+                  </div>
+                  <span className="text-xs font-bold text-emerald-400">{currentSpeed} km/h</span>
+                </div>
+
+                {/* Device Y (Participant) */}
+                <div className="p-3 rounded-2xl bg-slate-800/80 border border-slate-700 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full bg-blue-500 text-white font-bold flex items-center justify-center">
+                      S
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-white">Sumanth</p>
+                      <p className="text-[10px] text-slate-400">Device Y • 10m ahead on NH16</p>
+                    </div>
+                  </div>
+                  <span className="text-xs font-bold text-cyan-300">Joined</span>
+                </div>
+
+                <div className="pt-1 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSimulatedFriendJoined(false);
+                      showToast('Simulated Device Y member disconnected');
+                    }}
+                    className="flex-1 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Disconnect Device Y
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCopyId}
+                    className="py-2 px-3 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 text-xs font-bold transition-colors cursor-pointer flex items-center gap-1"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Copy ID</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* [MEMBERS DENIED / NOT JOINED LAYOUT]: Access restricted per user requirement */
+              <div className="space-y-3.5 text-center py-2">
+                <div className="w-14 h-14 rounded-3xl bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto border border-rose-500/30">
+                  <ShieldAlert className="w-7 h-7" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-white">Telemetry Access Restricted / Denied</h4>
+                  <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                    External viewers cannot see live convoy locations. Only participants who enter this trip’s unique ID from Device Y/Z are granted access.
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-between">
+                  <div className="text-left">
+                    <span className="text-[10px] text-slate-500 block uppercase">Secret Trip ID</span>
+                    <span className="text-xs font-mono font-bold text-cyan-400">
+                      {activeSharedTrip?.id || currentTripId}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleCopyId}
+                    className="px-3 py-1.5 rounded-xl bg-cyan-500/20 text-cyan-300 text-xs font-bold hover:bg-cyan-500/30 transition-colors cursor-pointer"
+                  >
+                    {copied ? 'Copied!' : 'Copy ID'}
+                  </button>
+                </div>
+
+                {/* Simulate Device Y joining for testing */}
+                <button
+                  type="button"
+                  onClick={handleSimulateFriendJoin}
+                  className="w-full py-3 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white text-xs font-bold rounded-2xl shadow-lg shadow-blue-900/40 transition-all cursor-pointer transform hover:scale-[1.02]"
+                >
+                  ✓ Simulate Friend Joining (Device Y)
+                </button>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setShowConvoyModal(false)}
+              className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-2xl transition-colors cursor-pointer"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────
+          CHANGE DESTINATION MODAL
+         ───────────────────────────────────────────────────────────── */}
+      {showDestModal && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <form
+            onSubmit={handleDestinationSubmit}
+            className="bg-[#121B24] rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-700 space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-white">Change Destination</h3>
+              <button
+                type="button"
+                onClick={() => setShowDestModal(false)}
+                className="p-1 rounded-full text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-400">
+              Updating destination syncs across all joined devices in real time.
+            </p>
+
+            <input
+              type="text"
+              placeholder="e.g. Asif Nagar, Vijayawada, Gachibowli"
+              value={newDestInput}
+              onChange={(e) => setNewDestInput(e.target.value)}
+              className="w-full px-4 py-3 bg-[#1A2634] border border-slate-700 rounded-2xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
+              autoFocus
+            />
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowDestModal(false)}
+                className="flex-1 py-3 rounded-2xl bg-slate-800 text-slate-300 text-xs font-bold hover:bg-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="flex-1 py-3 rounded-2xl bg-cyan-600 text-white text-xs font-bold hover:bg-cyan-500 shadow-lg shadow-cyan-600/30"
+              >
+                Update Everywhere
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────
+          END NAVIGATION CONFIRMATION MODAL
+         ───────────────────────────────────────────────────────────── */}
       {showEndModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-[#16222F] rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-[#27384A] space-y-4">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-[#121B24] rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-700 space-y-4">
             <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 flex items-center justify-center">
               <StopCircle className="w-6 h-6" />
             </div>
 
             <div>
-              <h3 className="text-base font-bold text-white">End Navigation?</h3>
-              <p className="text-xs text-white/60 mt-1">
-                This will stop live tracking for all participants in this convoy. In accordance with privacy rules, member locations will be permanently removed.
+              <h3 className="text-lg font-bold text-white">End Navigation?</h3>
+              <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                Ending navigation stops live GPS tracking and completes the trip. All destination states and route overlays will be reset cleanly.
               </p>
             </div>
 
-            <div className="flex gap-2.5 pt-2">
+            <div className="flex items-center gap-2.5 pt-2">
               <button
                 type="button"
                 onClick={() => setShowEndModal(false)}
-                className="flex-1 py-3 bg-[#202E3E] text-white text-xs font-bold rounded-2xl cursor-pointer"
+                className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-2xl transition-colors cursor-pointer"
               >
-                Keep Going
+                Keep Navigating
               </button>
               <button
                 type="button"
                 onClick={handleEndNavigationConfirm}
-                className="flex-1 py-3 bg-[#E11D48] hover:bg-[#BE123C] text-white text-xs font-bold rounded-2xl shadow-md cursor-pointer"
+                className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-2xl shadow-lg shadow-rose-600/30 transition-colors cursor-pointer"
               >
-                End Navigation
+                End & Reset
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Change Destination Modal ── */}
-      {showDestModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-[#16222F] rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-[#27384A] relative">
-            <button
-              type="button"
-              onClick={() => setShowDestModal(false)}
-              className="absolute top-4 right-4 p-2 text-white/40 hover:text-white rounded-full cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            <h3 className="text-base font-bold text-white mb-1">Update Destination</h3>
-            <p className="text-xs text-white/60 mb-4">
-              Synchronizes in real time with all convoy participants' devices.
-            </p>
-
-            <form onSubmit={handleDestinationSubmit} className="space-y-4">
-              <input
-                type="text"
-                placeholder="Enter new destination..."
-                value={newDestInput}
-                onChange={(e) => setNewDestInput(e.target.value)}
-                className="w-full px-4 py-3 bg-[#0E1620] border border-[#27384A] rounded-2xl text-sm font-medium text-white placeholder-white/40 focus:outline-none focus:border-[#34D399]"
-                autoFocus
-              />
-
-              <div className="flex gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setShowDestModal(false)}
-                  className="flex-1 py-3 bg-[#202E3E] text-white text-sm font-bold rounded-2xl cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-3 bg-[#087F5B] hover:bg-[#064E3B] text-white text-sm font-bold rounded-2xl shadow-md cursor-pointer"
-                >
-                  Sync Update
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}

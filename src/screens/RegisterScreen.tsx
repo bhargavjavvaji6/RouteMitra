@@ -25,16 +25,34 @@ export const RegisterScreen: React.FC = () => {
       setError('Please enter a valid email address');
       return;
     }
-    if (password.length < 8) {
-      setError('Password must contain at least 8 characters');
+    if (password.length < 6) {
+      setError('Password must contain at least 6 characters');
       return;
     }
 
     setLoading(true);
     setTimeout(() => {
+      const result = registerUser(name.trim(), email.trim(), password);
       setLoading(false);
-      registerUser(name.trim(), email.trim());
-    }, 600);
+      if (!result.success) {
+        setError(result.error || 'Failed to create account. Please try again.');
+      }
+    }, 400);
+  };
+
+  const handleSocialClick = async (provider: 'google' | 'facebook' | 'instagram' | 'apple') => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await loginWithSocial(provider);
+      if (!res.success) {
+        setError(res.error || `Failed to authenticate with ${provider}`);
+      }
+    } catch {
+      setError(`Unable to connect to ${provider} authentication service`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -66,7 +84,7 @@ export const RegisterScreen: React.FC = () => {
             {/* Google */}
             <button
               type="button"
-              onClick={() => loginWithSocial('google')}
+              onClick={() => handleSocialClick('google')}
               className="w-13 h-13 rounded-2xl bg-[#202E3E] hover:bg-[#2A3C50] border border-[#2D3E52] hover:border-[#4285F4] flex items-center justify-center shadow-md transition-all hover:scale-105 cursor-pointer group"
               title="Continue with Google"
             >
@@ -93,7 +111,7 @@ export const RegisterScreen: React.FC = () => {
             {/* Facebook */}
             <button
               type="button"
-              onClick={() => loginWithSocial('facebook')}
+              onClick={() => handleSocialClick('facebook')}
               className="w-13 h-13 rounded-2xl bg-[#202E3E] hover:bg-[#2A3C50] border border-[#2D3E52] hover:border-[#1877F2] flex items-center justify-center shadow-md transition-all hover:scale-105 cursor-pointer group"
               title="Continue with Facebook"
             >
@@ -105,7 +123,7 @@ export const RegisterScreen: React.FC = () => {
             {/* Instagram */}
             <button
               type="button"
-              onClick={() => loginWithSocial('instagram')}
+              onClick={() => handleSocialClick('instagram')}
               className="w-13 h-13 rounded-2xl bg-[#202E3E] hover:bg-[#2A3C50] border border-[#2D3E52] hover:border-[#E1306C] flex items-center justify-center shadow-md transition-all hover:scale-105 cursor-pointer group"
               title="Continue with Instagram"
             >
@@ -127,7 +145,7 @@ export const RegisterScreen: React.FC = () => {
             {/* Apple */}
             <button
               type="button"
-              onClick={() => loginWithSocial('apple')}
+              onClick={() => handleSocialClick('apple')}
               className="w-13 h-13 rounded-2xl bg-[#202E3E] hover:bg-[#2A3C50] border border-[#2D3E52] hover:border-white/50 flex items-center justify-center shadow-md transition-all hover:scale-105 cursor-pointer group"
               title="Continue with Apple"
             >

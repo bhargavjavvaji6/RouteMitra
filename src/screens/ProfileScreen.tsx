@@ -21,6 +21,10 @@ import {
   Lock,
   Sparkles,
   Navigation,
+  Database,
+  HardDrive,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
 import { useTrip } from '../context/TripContext';
 
@@ -45,6 +49,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ initialSection = '
     showToast,
     copyTripId,
     currentTripId,
+    isOnline,
+    cacheCurrentTripForOffline,
+    clearOfflineData,
   } = useTrip();
 
   // Edit Name Modal State (Change Name ONLY - Requirement 5)
@@ -150,7 +157,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ initialSection = '
 
       {/* ── Main Content Area ── */}
       <main className="flex-1 max-w-xl w-full mx-auto px-4 sm:px-6 pt-5 space-y-4">
-        {/* ── Google Luxury Profile Card (Matches WhatsApp_Image_2026-10-29_at_10.18.44_PM_fb379a66.jpeg) ── */}
         <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-200/80 transition-all">
           <div className="flex items-center justify-between gap-3">
             {/* Avatar with Circular Gradient Border and Pencil Badge */}
@@ -158,12 +164,12 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ initialSection = '
               <div className="w-18 h-18 sm:w-20 sm:h-20 rounded-full p-[3px] bg-gradient-to-tr from-[#3B82F6] via-[#60A5FA] to-[#93C5FD] shadow-md flex items-center justify-center">
                 <div className="w-full h-full rounded-full overflow-hidden bg-slate-100">
                   <img
-                    src={user?.avatar || '/assets/aistudio/image_3d1745ac.png'}
+                    src={user?.avatar || '/assets/bhargav_avatar.svg'}
                     alt={user?.name || 'Bhargav'}
                     className="w-full h-full object-cover"
                     onError={(e) => {
                       (e.currentTarget as HTMLImageElement).src =
-                        '/assets/bhargav_avatar_clean.jpg';
+                        '/assets/bhargav_avatar.svg';
                     }}
                   />
                 </div>
@@ -219,7 +225,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ initialSection = '
           </div>
         </div>
 
-        {/* ── Google Multi-Pill Action 1: Manage your Google Account (Matches Image 3) ── */}
+       
         <button
           type="button"
           onClick={() => {
@@ -253,7 +259,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ initialSection = '
           </span>
         </button>
 
-        {/* ── Google Multi-Pill Action 2: Turn on Incognito mode (Matches Image 3) ── */}
         <button
           type="button"
           onClick={toggleIncognito}
@@ -446,13 +451,13 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ initialSection = '
         {/* ── TAB 3: HISTORY SECTION (Moved from Dashboard - Requirement 3) ── */}
         {activeSection === 'history' && (
           <div className="space-y-4 animate-fade-in">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between pt-1">
               <div>
                 <h3 className="text-sm font-bold text-slate-900">Trip History</h3>
                 <p className="text-xs text-slate-500">Your completed convoy journeys</p>
               </div>
 
-              <span className="text-xs font-semibold text-slate-500">{trips.length} Trips</span>
+              <span className="text-xs font-semibold text-slate-500">{trips.length} Trips Cached</span>
             </div>
 
             <div className="space-y-2.5">
@@ -467,7 +472,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ initialSection = '
                     </div>
 
                     <div>
-                      <h4 className="text-sm font-bold text-slate-900">{item.title}</h4>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-sm font-bold text-slate-900">{item.title}</h4>
+                      </div>
                       <p className="text-xs text-slate-500 mt-0.5">
                         {item.date} • {item.membersCount} participants
                       </p>
@@ -475,11 +482,15 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ initialSection = '
                         <span className="text-[11px] font-semibold text-slate-600">{item.distance}</span>
                         <span className="text-[11px] text-slate-400">•</span>
                         <span className="text-[11px] font-semibold text-slate-600">{item.duration}</span>
+                        <span className="text-[11px] text-slate-400">•</span>
+                        <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-medium">
+                          Offline Ready
+                        </span>
                       </div>
                     </div>
                   </div>
 
-                  <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200/60">
+                  <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200/60 shrink-0">
                     Completed
                   </span>
                 </div>
@@ -723,10 +734,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ initialSection = '
 
           <button
             type="button"
-            onClick={() => setActiveSection('history')}
-            className={`flex flex-col items-center gap-1 py-1 px-3 transition-colors cursor-pointer ${
-              activeSection === 'history' ? 'text-amber-600' : 'text-slate-400 hover:text-slate-600'
-            }`}
+            onClick={() => navigateTo('history')}
+            className="flex flex-col items-center gap-1 py-1 px-3 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
           >
             <Calendar className="w-5 h-5" />
             <span className="text-[10px] font-bold">Trips</span>
@@ -737,7 +746,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ initialSection = '
             className="flex flex-col items-center gap-1 py-1 px-3 text-[#087F5B] transition-colors cursor-pointer"
           >
             <div className="w-5 h-5 rounded-full overflow-hidden border border-[#087F5B]">
-              <img src={user?.avatar || '/assets/aistudio/image_3d1745ac.png'} alt="Profile" className="w-full h-full object-cover" />
+              <img src={user?.avatar || '/assets/bhargav_avatar.svg'} alt="Profile" className="w-full h-full object-cover" />
             </div>
             <span className="text-[10px] font-bold">Profile</span>
           </button>

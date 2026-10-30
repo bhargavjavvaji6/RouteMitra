@@ -16,7 +16,7 @@ export const LoginScreen: React.FC = () => {
     setError(null);
 
     if (!email.trim()) {
-      setError('Enter your email address');
+      setError('Enter your registered email address');
       return;
     }
     if (password.length < 6) {
@@ -26,15 +26,27 @@ export const LoginScreen: React.FC = () => {
 
     setLoading(true);
     setTimeout(() => {
+      const result = loginUser(email.trim(), password);
       setLoading(false);
-      loginUser(email.trim());
-    }, 600);
+      if (!result.success) {
+        setError(result.error || 'Invalid credentials. Please verify your email and password.');
+      }
+    }, 400);
   };
 
-  const handleDemoSignIn = () => {
-    setEmail('rohith@routemitra.app');
-    setPassword('demopass123');
-    loginUser('rohith@routemitra.app');
+  const handleSocialClick = async (provider: 'google' | 'facebook' | 'instagram' | 'apple') => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await loginWithSocial(provider);
+      if (!res.success) {
+        setError(res.error || `Failed to authenticate with ${provider}`);
+      }
+    } catch {
+      setError(`Unable to connect to ${provider} authentication service`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -71,7 +83,7 @@ export const LoginScreen: React.FC = () => {
             {/* Google */}
             <button
               type="button"
-              onClick={() => loginWithSocial('google')}
+              onClick={() => handleSocialClick('google')}
               className="w-13 h-13 rounded-2xl bg-[#202E3E] hover:bg-[#2A3C50] border border-[#2D3E52] hover:border-[#4285F4] flex items-center justify-center shadow-md transition-all hover:scale-105 cursor-pointer group"
               title="Sign in with Google"
             >
@@ -98,7 +110,7 @@ export const LoginScreen: React.FC = () => {
             {/* Facebook */}
             <button
               type="button"
-              onClick={() => loginWithSocial('facebook')}
+              onClick={() => handleSocialClick('facebook')}
               className="w-13 h-13 rounded-2xl bg-[#202E3E] hover:bg-[#2A3C50] border border-[#2D3E52] hover:border-[#1877F2] flex items-center justify-center shadow-md transition-all hover:scale-105 cursor-pointer group"
               title="Sign in with Facebook"
             >
@@ -110,7 +122,7 @@ export const LoginScreen: React.FC = () => {
             {/* Instagram */}
             <button
               type="button"
-              onClick={() => loginWithSocial('instagram')}
+              onClick={() => handleSocialClick('instagram')}
               className="w-13 h-13 rounded-2xl bg-[#202E3E] hover:bg-[#2A3C50] border border-[#2D3E52] hover:border-[#E1306C] flex items-center justify-center shadow-md transition-all hover:scale-105 cursor-pointer group"
               title="Sign in with Instagram"
             >
@@ -132,7 +144,7 @@ export const LoginScreen: React.FC = () => {
             {/* Apple */}
             <button
               type="button"
-              onClick={() => loginWithSocial('apple')}
+              onClick={() => handleSocialClick('apple')}
               className="w-13 h-13 rounded-2xl bg-[#202E3E] hover:bg-[#2A3C50] border border-[#2D3E52] hover:border-white/50 flex items-center justify-center shadow-md transition-all hover:scale-105 cursor-pointer group"
               title="Sign in with Apple"
             >
@@ -206,14 +218,6 @@ export const LoginScreen: React.FC = () => {
             ) : (
               'Sign In'
             )}
-          </button>
-
-          <button
-            type="button"
-            onClick={handleDemoSignIn}
-            className="w-full py-2.5 px-4 bg-transparent border border-[#34D399]/40 hover:bg-[#34D399]/10 text-[#34D399] text-xs font-bold rounded-xl transition-all cursor-pointer"
-          >
-            ⚡ Fast Demo Sign-In (Rohith)
           </button>
         </form>
 

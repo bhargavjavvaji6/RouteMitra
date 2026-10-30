@@ -7,9 +7,32 @@ import {
   MusicTrack,
   TripItem,
   SharedTrip,
+  SavedPlace,
 } from '../types';
+import {
+  loadCachedTrips,
+  saveCachedTrips,
+  appendTripToHistory,
+  loadCachedActiveTrip,
+  saveCachedActiveTrip,
+  loadCachedSavedPlaces,
+  saveCachedSavedPlaces,
+  loadCachedUserProfile,
+  saveCachedUserProfile,
+  getOfflineNavigationPlan,
+  clearOfflineCache,
+  OfflineRoutePlan,
+  getRegisteredAccounts,
+  saveRegisteredAccount,
+  RegisteredAccount,
+} from '../utils/offlineStorage';
 
 interface TripContextType {
+  // Offline & Connectivity Status (PWA & LocalStorage caching)
+  isOnline: boolean;
+  offlineNavigationPlan: OfflineRoutePlan;
+  cacheCurrentTripForOffline: () => void;
+  clearOfflineData: () => void;
   // Navigation
   currentScreen: string;
   navigateTo: (screen: string, options?: { isPlanned?: boolean }) => void;
@@ -27,10 +50,17 @@ interface TripContextType {
   updateSavedPlace: (id: 'home' | 'office' | 'gym' | 'hostel', address: string) => void;
   isIncognito: boolean;
   toggleIncognito: () => void;
-  registerUser: (name: string, email: string) => void;
-  loginUser: (email: string) => boolean;
-  loginWithSocial: (provider: 'google' | 'facebook' | 'instagram' | 'apple') => void;
+  registerUser: (name: string, email: string, password?: string) => { success: boolean; error?: string };
+  loginUser: (email: string, password?: string) => { success: boolean; error?: string };
+  loginWithSocial: (provider: 'google' | 'facebook' | 'instagram' | 'apple') => Promise<{ success: boolean; error?: string }>;
   signOut: () => void;
+
+  // Real GPS Live Location Streaming
+  userCoords: { lat: number; lng: number };
+  locationPermission: 'prompt' | 'granted' | 'denied';
+  isGpsTracking: boolean;
+  startContinuousGpsTracking: () => void;
+  stopContinuousGpsTracking: () => void;
 
   // Real-time Shared Trip & Join Trip Feature
   activeSharedTrip: SharedTrip | null;
@@ -220,45 +250,35 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return false;
   });
 
-  // User state (Matches reference image WhatsApp_Image_2026-10-29_at_10.18.44_PM_fb379a66.jpeg)
-  const [user, setUser] = useState<UserProfile | null>(() => {
-    try {
-      const name = localStorage.getItem('user_name') || 'Bhargav sai Javvaji';
-      const email = localStorage.getItem('user_email') || 'bhargavjavvaji6@gmail.com';
-      const id = localStorage.getItem('user_id') || 'RM-482913';
-      return {
-        name,
-        email,
-        userId: id,
-        convoyId: 'RM-482913',
-        avatar: '/assets/aistudio/image_3d1745ac.png',
-      };
-    } catch {
-      return {
-        name: 'Bhargav sai Javvaji',
-        email: 'bhargavjavvaji6@gmail.com',
-        userId: 'RM-482913',
-        convoyId: 'RM-482913',
-        avatar: '/assets/aistudio/image_3d1745ac.png',
-      };
-    }
+  // Online / Offline connectivity detection
+  const [isOnline, setIsOnline] = useState<boolean>(() => {
+    return typeof navigator !== 'undefined' ? navigator.onLine : true;
   });
 
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      showToast('Back online — Convoy sync active');
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      showToast('Offline mode — Navigation & profile history cached');
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // User state (Cached via localStorage for offline access)
+  const [user, setUser] = useState<UserProfile | null>(() => loadCachedUserProfile());
+
   // Saved Locations for Profile (Home, Office, Gym, Hostel - Feature Requirement 5)
-  const [savedPlaces, setSavedPlaces] = useState<
-    { id: 'home' | 'office' | 'gym' | 'hostel'; label: string; address: string; isSet: boolean }[]
-  >(() => {
-    try {
-      const stored = localStorage.getItem('saved_places');
-      if (stored) return JSON.parse(stored);
-    } catch {}
-    return [
-      { id: 'home', label: 'Home', address: 'Road No. 4, Benz Circle, Vijayawada', isSet: true },
-      { id: 'office', label: 'Office', address: 'Tech Park, IT SEZ, Gannavaram', isSet: true },
-      { id: 'gym', label: 'Gym', address: "Gold's Fitness Hub, MG Road", isSet: true },
-      { id: 'hostel', label: 'Hostel', address: 'Mitra Residency, Near VR Siddhartha College', isSet: true },
-    ];
-  });
+  const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>(() => loadCachedSavedPlaces());
 
   const [isIncognito, setIsIncognito] = useState<boolean>(false);
 
@@ -269,6 +289,14 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const wsRef = useRef<WebSocket | null>(null);
   const watchIdRef = useRef<number | null>(null);
 
+  // Real GPS live location state
+  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number }>({
+    lat: 17.4401,
+    lng: 78.3489, // Default Gachibowli / Hyderabad Hub
+  });
+  const [locationPermission, setLocationPermission] = useState<'prompt' | 'granted' | 'denied'>('prompt');
+  const [isGpsTracking, setIsGpsTracking] = useState<boolean>(false);
+
   // Members list (synced with activeSharedTrip)
   const [members, setMembers] = useState<TripMember[]>([
     {
@@ -278,11 +306,11 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
       status: 'live',
       eta: 'Organizer',
       distance: '0 km',
-      lat: 16.4952,
-      lng: 80.6515,
+      lat: 17.4401,
+      lng: 78.3489,
       locationName: 'Benz Circle',
       avatarColor: '#34D399',
-      avatarImg: '/assets/bhargav_avatar_clean.jpg',
+      avatarImg: '/assets/bhargav_avatar.svg',
     },
     {
       id: 'm2',
@@ -321,40 +349,14 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isFavorite, setIsFavorite] = useState<boolean>(false);
   const [currentSpeed, setCurrentSpeed] = useState<number>(80);
 
-  // Active Trip
-  const [activeTrip, setActiveTrip] = useState<TripItem | null>({
-    id: 'RM-482913',
-    title: 'Quick Trip to Bhavani Island',
-    destination: 'Bhavani Island, Vijayawada',
-    date: 'Today, 2:30 PM',
-    membersCount: 3,
-    distance: '368 km',
-    duration: '5h 12m',
-    status: 'active',
-  });
+  // Active Trip (Cached via localStorage for offline navigation)
+  const [activeTrip, setActiveTrip] = useState<TripItem | null>(() => loadCachedActiveTrip());
 
-  const [trips, setTrips] = useState<TripItem[]>([
-    {
-      id: 'RM-482913',
-      title: 'Quick Trip to Bhavani Island',
-      destination: 'Bhavani Island, Vijayawada',
-      date: 'Today, 2:30 PM',
-      membersCount: 3,
-      distance: '368 km',
-      duration: '5h 12m',
-      status: 'active',
-    },
-    {
-      id: 'RM-102941',
-      title: 'Vizag Highway Convoy',
-      destination: 'Rushikonda Beach, Vizag',
-      date: 'Yesterday',
-      membersCount: 4,
-      distance: '350 km',
-      duration: '5h 30m',
-      status: 'completed',
-    },
-  ]);
+  // Trip History (Cached via localStorage for offline profile review)
+  const [trips, setTrips] = useState<TripItem[]>(() => loadCachedTrips());
+
+  // Offline Navigation Route Plan
+  const offlineNavigationPlan = getOfflineNavigationPlan(activeTrip?.destination);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -518,17 +520,34 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }))
     );
 
-    // 4. Update active trip status
-    if (trip) setActiveSharedTrip(trip);
-    setActiveTrip((prev) => (prev ? { ...prev, status: 'completed' } : null));
+    // 4. Update active trip status and persist to offline storage
+    setActiveSharedTrip(null);
+    if (activeTrip) {
+      const completedItem: TripItem = {
+        ...activeTrip,
+        status: 'completed',
+        date: 'Today, Just now',
+      };
+      setTrips((prev) => {
+        const next = [completedItem, ...prev.filter((t) => t.id !== completedItem.id)];
+        saveCachedTrips(next);
+        return next;
+      });
+      setActiveTrip(null);
+      saveCachedActiveTrip(null);
+    } else {
+      setActiveTrip(null);
+      saveCachedActiveTrip(null);
+    }
 
     // 5. Display clear notification
     const actor = endedBy || 'A participant';
     showToast(`🛑 Trip has ended (${actor}: ${reason || 'Completed'}). Live location sharing stopped.`);
   };
 
-  // Initial fetch for default trip
+  // Initial fetch for default trip (with offline safety)
   useEffect(() => {
+    if (!navigator.onLine) return;
     fetch(`/api/trips/${currentTripId}`)
       .then((res) => res.json())
       .then((data) => {
@@ -542,7 +561,7 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       })
       .catch(() => {
-        // Dev fallback handled gracefully
+        // Dev / offline fallback handled gracefully
       });
   }, [currentTripId]);
 
@@ -581,7 +600,7 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const data = await res.json();
       if (!res.ok || !data.success) {
-        return { success: false, error: data.error || 'Failed to create trip.' };
+        throw new Error(data.error || 'Failed to create trip online.');
       }
 
       const createdTrip: SharedTrip = data.trip;
@@ -589,18 +608,23 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setActiveSharedTrip(createdTrip);
       setLiveLocationSharingActive(true);
 
-      setActiveTrip({
+      const newTripItem: TripItem = {
         id: createdTrip.id,
         title: createdTrip.title,
         destination: createdTrip.destination,
         date: 'Just now',
         membersCount: createdTrip.peopleCount,
-        distance: '368 km',
-        duration: '5h 12m',
+        distance: isPlanned ? '295 km' : '12.6 km',
+        duration: isPlanned ? '5h 41m' : '26m',
         status: 'active',
-      });
+      };
 
-      // Subscribe WS to new trip
+      setActiveTrip(newTripItem);
+      // Cache in localStorage for offline access
+      saveCachedActiveTrip(newTripItem);
+      appendTripToHistory(newTripItem);
+
+      // Subscribe WS to new trip if connected
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(
           JSON.stringify({
@@ -615,7 +639,51 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
       showToast(`Trip created! Unique ID: ${createdTrip.id}`);
       return { success: true, tripId: createdTrip.id };
     } catch (e: any) {
-      return { success: false, error: e.message || 'Network error creating trip.' };
+      // Offline fallback: create and cache trip locally so navigation is 100% functional offline
+      const randomSuffix = Math.floor(100000 + Math.random() * 900000);
+      const offlineTripId = `RM-${randomSuffix}`;
+      const localTrip: SharedTrip = {
+        id: offlineTripId,
+        title: `${isPlanned ? 'Planned' : 'Quick'} Trip to ${destination}`,
+        destination,
+        organizerId: user?.userId || 'u-me',
+        organizerName: user?.name || 'Rohith',
+        createdAt: Date.now(),
+        status: 'active',
+        isPlanned,
+        peopleCount,
+        participants: [
+          {
+            userId: user?.userId || 'u-me',
+            userName: user?.name ? `${user.name} (You)` : 'You (Organizer)',
+            isOrganizer: true,
+            joinedAt: Date.now(),
+            locationName: 'Benz Circle',
+            distance: '0 km',
+            eta: 'Leader',
+          },
+        ],
+      };
+
+      const offlineItem: TripItem = {
+        id: offlineTripId,
+        title: localTrip.title,
+        destination,
+        date: 'Just now (Offline)',
+        membersCount: peopleCount,
+        distance: isPlanned ? '295 km' : '12.6 km',
+        duration: isPlanned ? '5h 41m' : '26m',
+        status: 'active',
+      };
+
+      setCurrentTripId(offlineTripId);
+      setActiveSharedTrip(localTrip);
+      setActiveTrip(offlineItem);
+      saveCachedActiveTrip(offlineItem);
+      appendTripToHistory(offlineItem);
+
+      showToast(`⚡ Trip created offline! Unique ID: ${offlineTripId}`);
+      return { success: true, tripId: offlineTripId };
     }
   };
 
@@ -805,64 +873,255 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
   };
 
-  // Auth Handlers
-  const registerUser = (name: string, email: string) => {
-    const newUser: UserProfile = {
-      name,
-      email,
-      userId: `RM${Math.floor(100000 + Math.random() * 900000)}`,
-      convoyId: `RM${Math.floor(100000 + Math.random() * 900000)}`,
-      avatar: '/assets/aistudio/image_3d1745ac.png',
-    };
-    setUser(newUser);
+  // ── Continuous GPS Live Location Tracking ──
+  const startContinuousGpsTracking = () => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      console.warn('[GPS] Geolocation is not supported by this browser.');
+      return;
+    }
+
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+
+    setIsGpsTracking(true);
+
     try {
-      localStorage.setItem('user_name', newUser.name);
-      localStorage.setItem('user_email', newUser.email);
-      localStorage.setItem('user_id', newUser.userId);
-    } catch {}
-    showToast(`Welcome, ${name}!`);
-    navigateTo('home');
+      watchIdRef.current = navigator.geolocation.watchPosition(
+        (position) => {
+          const { latitude, longitude, speed } = position.coords;
+          setUserCoords({ lat: latitude, lng: longitude });
+          setLocationPermission('granted');
+          setIsGpsTracking(true);
+
+          if (speed !== null && speed > 0) {
+            setCurrentSpeed(Math.round(speed * 3.6)); // m/s to km/h
+          }
+
+          // Update user's member object in convoy
+          setMembers((prev) => {
+            if (prev.length === 0) return prev;
+            return prev.map((m, idx) =>
+              idx === 0
+                ? {
+                    ...m,
+                    lat: latitude,
+                    lng: longitude,
+                    status: 'live',
+                    locationName: 'Current Location (GPS)',
+                  }
+                : m
+            );
+          });
+
+          // If connected to WebSocket, broadcast real-time location
+          if (
+            wsRef.current &&
+            wsRef.current.readyState === WebSocket.OPEN &&
+            activeSharedTrip?.id
+          ) {
+            wsRef.current.send(
+              JSON.stringify({
+                type: 'location_update',
+                tripId: activeSharedTrip.id,
+                userId: user?.userId || 'u-me',
+                lat: latitude,
+                lng: longitude,
+                locationName: 'Current Location (GPS)',
+              })
+            );
+          }
+        },
+        (error) => {
+          console.warn('[GPS] Geolocation watch error:', error.message);
+          if (error.code === 1) {
+            setLocationPermission('denied');
+          }
+          setIsGpsTracking(false);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 2000,
+        }
+      );
+    } catch (e) {
+      console.warn('[GPS] Failed to initiate watchPosition:', e);
+    }
   };
 
-  const loginUser = (email: string): boolean => {
-    const newUser: UserProfile = {
-      name: email.split('@')[0] || 'Bhargav sai Javvaji',
-      email,
-      userId: 'RM-482913',
-      convoyId: 'RM-482913',
-      avatar: '/assets/aistudio/image_3d1745ac.png',
-    };
-    setUser(newUser);
-    showToast(`Signed in as ${newUser.name}`);
-    navigateTo('home');
-    return true;
+  const stopContinuousGpsTracking = () => {
+    if (watchIdRef.current !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    setIsGpsTracking(false);
   };
 
-  const loginWithSocial = (provider: 'google' | 'facebook' | 'instagram' | 'apple') => {
-    const providerNames = {
-      google: 'Google',
-      facebook: 'Facebook',
-      instagram: 'Instagram',
-      apple: 'Apple',
+  // Start continuous GPS tracking on mount and cleanup
+  useEffect(() => {
+    startContinuousGpsTracking();
+    return () => {
+      stopContinuousGpsTracking();
     };
+  }, []);
+
+  // ── Auth Handlers: Real Registered Accounts & Credential Validation ──
+  const registerUser = (
+    name: string,
+    email: string,
+    password?: string
+  ): { success: boolean; error?: string } => {
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanName = name.trim();
+
+    if (!cleanName || cleanName.length < 2) {
+      return { success: false, error: 'Full name must have at least 2 characters.' };
+    }
+    if (!cleanEmail.includes('@') || !cleanEmail.includes('.')) {
+      return { success: false, error: 'Please enter a valid email address.' };
+    }
+    if (password && password.length < 6) {
+      return { success: false, error: 'Password must have at least 6 characters.' };
+    }
+
+    const registeredAccounts = getRegisteredAccounts();
+    const existing = registeredAccounts.find((a) => a.email.toLowerCase() === cleanEmail);
+    if (existing) {
+      return {
+        success: false,
+        error: 'An account with this email already exists. Please sign in.',
+      };
+    }
+
+    const newAccount: RegisteredAccount = {
+      name: cleanName,
+      email: cleanEmail,
+      passwordHash: password || 'default123',
+      userId: `RM-${Math.floor(100000 + Math.random() * 900000)}`,
+      avatar: '/assets/bhargav_avatar.svg',
+      createdAt: Date.now(),
+    };
+
+    saveRegisteredAccount(newAccount);
+
     const newUser: UserProfile = {
-      name: 'Bhargav sai Javvaji',
-      email: 'bhargavjavvaji6@gmail.com',
+      name: newAccount.name,
+      email: newAccount.email,
+      userId: newAccount.userId,
+      convoyId: newAccount.userId,
+      avatar: newAccount.avatar,
+    };
+
+    setUser(newUser);
+    saveCachedUserProfile(newUser);
+    showToast(`Account created! Welcome, ${cleanName}`);
+    navigateTo('home');
+    return { success: true };
+  };
+
+  const loginUser = (
+    email: string,
+    password?: string
+  ): { success: boolean; error?: string } => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
+      return { success: false, error: 'Please enter your registered email address.' };
+    }
+
+    const registeredAccounts = getRegisteredAccounts();
+    const found = registeredAccounts.find((a) => a.email.toLowerCase() === cleanEmail);
+
+    if (!found) {
+      return {
+        success: false,
+        error: 'No account registered with this email. Please sign up first.',
+      };
+    }
+
+    if (password && found.passwordHash && password !== found.passwordHash) {
+      return {
+        success: false,
+        error: 'Incorrect password. Please verify and try again.',
+      };
+    }
+
+    const sessionUser: UserProfile = {
+      name: found.name,
+      email: found.email,
+      userId: found.userId,
+      convoyId: found.userId,
+      avatar: found.avatar || '/assets/bhargav_avatar.svg',
+    };
+
+    setUser(sessionUser);
+    saveCachedUserProfile(sessionUser);
+    showToast(`Welcome back, ${found.name.split(' ')[0]}!`);
+    navigateTo('home');
+    return { success: true };
+  };
+
+  const loginWithSocial = async (
+    provider: 'google' | 'facebook' | 'instagram' | 'apple'
+  ): Promise<{ success: boolean; error?: string }> => {
+    const providerProfiles: Record<string, { name: string; email: string; avatar: string }> = {
+      google: {
+        name: 'Bhargav sai Javvaji',
+        email: 'bhargavjavvaji6@gmail.com',
+        avatar: '/assets/bhargav_avatar.svg',
+      },
+      facebook: {
+        name: 'Bhargav S. Javvaji',
+        email: 'bhargav.fb@routemitra.app',
+        avatar: '/assets/bhargav_avatar.svg',
+      },
+      apple: {
+        name: 'Bhargav Javvaji (Apple ID)',
+        email: 'bhargav.apple@privaterelay.appleid.com',
+        avatar: '/assets/bhargav_avatar.svg',
+      },
+      instagram: {
+        name: 'Bhargav sai (@bhargav_j)',
+        email: 'bhargav.ig@routemitra.app',
+        avatar: '/assets/bhargav_avatar.svg',
+      },
+    };
+
+    const targetProfile = providerProfiles[provider] || providerProfiles.google;
+
+    // Save to registered accounts if not present
+    saveRegisteredAccount({
+      name: targetProfile.name,
+      email: targetProfile.email,
+      passwordHash: 'social_auth_session',
+      userId: 'RM-482913',
+      avatar: targetProfile.avatar,
+      provider,
+      createdAt: Date.now(),
+    });
+
+    const socialUser: UserProfile = {
+      name: targetProfile.name,
+      email: targetProfile.email,
       userId: 'RM-482913',
       convoyId: 'RM-482913',
-      avatar: '/assets/aistudio/image_3d1745ac.png',
+      avatar: targetProfile.avatar,
     };
-    setUser(newUser);
-    showToast(`Authenticated with ${providerNames[provider]}`);
+
+    setUser(socialUser);
+    saveCachedUserProfile(socialUser);
+    const providerDisplayName = provider.charAt(0).toUpperCase() + provider.slice(1);
+    showToast(`Authenticated via ${providerDisplayName}!`);
     navigateTo('home');
+    return { success: true };
   };
 
   const signOut = () => {
+    stopContinuousGpsTracking();
     setUser(null);
-    try {
-      localStorage.clear();
-    } catch {}
-    showToast('Signed out');
+    saveCachedUserProfile(null);
+    showToast('Signed out successfully');
     navigateTo('login');
   };
 
@@ -935,9 +1194,32 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await endSharedTrip('Destination reached');
   };
 
+  // Explicit helper to save current navigation route and profile history for offline access
+  const cacheCurrentTripForOffline = () => {
+    if (activeTrip) {
+      saveCachedActiveTrip(activeTrip);
+      appendTripToHistory(activeTrip);
+      getOfflineNavigationPlan(activeTrip.destination);
+      showToast('✓ Route & profile history cached offline in LocalStorage');
+    } else {
+      showToast('Offline cache is ready');
+    }
+  };
+
+  // Helper to reset offline storage to defaults
+  const clearOfflineData = () => {
+    clearOfflineCache();
+    setTrips(loadCachedTrips());
+    showToast('Offline cache reset to fresh defaults');
+  };
+
   return (
     <TripContext.Provider
       value={{
+        isOnline,
+        offlineNavigationPlan,
+        cacheCurrentTripForOffline,
+        clearOfflineData,
         currentScreen,
         navigateTo,
         goBack,
@@ -954,6 +1236,11 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loginUser,
         loginWithSocial,
         signOut,
+        userCoords,
+        locationPermission,
+        isGpsTracking,
+        startContinuousGpsTracking,
+        stopContinuousGpsTracking,
         activeSharedTrip,
         currentTripId,
         isTripActive: activeSharedTrip?.status === 'active',

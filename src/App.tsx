@@ -14,6 +14,8 @@ import { MusicScreen } from './screens/MusicScreen';
 import { TripCompletionScreen } from './screens/TripCompletionScreen';
 import { RealTimeGoogleMapScreen } from './screens/RealTimeGoogleMapScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
+import { TripsScreen } from './screens/TripsScreen';
+import { OfflineIndicator } from './components/OfflineIndicator';
 import { Smartphone, Monitor } from 'lucide-react';
 
 const ScreenRouter: React.FC = () => {
@@ -53,11 +55,11 @@ const ScreenRouter: React.FC = () => {
       case 'members':
         return <ProfileScreen initialSection="members" />;
       case 'history':
-        return <ProfileScreen initialSection="history" />;
+      case 'trips':
+      case 'my-trips':
+        return <TripsScreen />;
       case 'settings':
         return <ProfileScreen initialSection="overview" />;
-      case 'my-trips':
-        return <ProfileScreen initialSection="history" />;
       case 'nearby':
         return <NearbyPlacesScreen />;
       case 'notifications':
@@ -146,6 +148,9 @@ const ScreenRouter: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Global Offline Status Indicator */}
+      <OfflineIndicator />
 
       {/* Global Toast Alert */}
       {toastMessage && (
