@@ -1,0 +1,8 @@
+{
+  "name": "RouteMitra - Travel Together, Reach Together",
+  "description": "Real-time group travel navigation, live distance tracking, places discovery, music player, and group coordination.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ],
+  "permissions": []
+}
