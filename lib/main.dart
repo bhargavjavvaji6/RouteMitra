@@ -44,7 +44,9 @@ class RouteMitraApp extends StatelessWidget {
               body: Center(child: CircularProgressIndicator()),
             );
           }
-          return snapshot.data == null ? const AuthScreen() : const HomeScreen();
+          return snapshot.data == null
+              ? const AuthScreen()
+              : const HomeScreen();
         },
       ),
     );

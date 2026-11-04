@@ -43,11 +43,14 @@ class TripService {
   }
 
   Future<String> joinTrip(String code) async {
-    final query = await _db.collection('trips')
+    final query = await _db
+        .collection('trips')
         .where('code', isEqualTo: code.trim().toUpperCase())
         .where('status', isEqualTo: 'active')
-        .limit(1).get();
-    if (query.docs.isEmpty) throw Exception('No active trip found for that code.');
+        .limit(1)
+        .get();
+    if (query.docs.isEmpty)
+      throw Exception('No active trip found for that code.');
     final trip = query.docs.first;
     final user = _auth.currentUser!;
     await trip.reference.collection('members').doc(_uid).set({
@@ -65,7 +68,8 @@ class TripService {
   }
 
   Stream<List<TripModel>> myActiveTrips() {
-    return _db.collection('trips')
+    return _db
+        .collection('trips')
         .where('memberIds', arrayContains: _uid)
         .where('status', isEqualTo: 'active')
         .snapshots()
@@ -76,8 +80,12 @@ class TripService {
       _db.collection('trips').doc(tripId).collection('members').snapshots();
 
   Future<void> updateMyLocation(String tripId, double lat, double lng) async {
-    await _db.collection('trips').doc(tripId).collection('members')
-        .doc(_uid).set({
+    await _db
+        .collection('trips')
+        .doc(tripId)
+        .collection('members')
+        .doc(_uid)
+        .set({
       'uid': _uid,
       'name': _auth.currentUser?.displayName ?? 'Member',
       'email': _auth.currentUser?.email,
