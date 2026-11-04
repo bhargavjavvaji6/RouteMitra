@@ -1,0 +1,8 @@
+# Merge these under the existing dependencies: key
+http: ^1.4.0
+flutter_tts: ^4.2.3
+video_player: ^2.9.5
+
+# Merge under the existing flutter: key (do not remove existing assets)
+assets:
+  - assets/video/route_mitra_intro.mp4
