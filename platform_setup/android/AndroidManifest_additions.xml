@@ -1,0 +1,11 @@
+<!-- Merge these entries into android/app/src/main/AndroidManifest.xml.
+     Place the uses-permission elements directly under <manifest>, before <application>.
+     Place the Maps meta-data element inside <application>. -->
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+<!-- Inside <application> -->
+<meta-data
+    android:name="com.google.android.geo.API_KEY"
+    android:value="${MAPS_API_KEY}" />

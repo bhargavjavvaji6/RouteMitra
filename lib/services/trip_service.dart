@@ -1,32 +1,96 @@
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../models/trip_model.dart';
+
 class TripService {
-  TripService({FirebaseFirestore? firestore}) : _db = firestore ?? FirebaseFirestore.instance;
-  final FirebaseFirestore _db;
-  CollectionReference<Map<String, dynamic>> get _trips => _db.collection('trips');
-  String _code() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; final r = Random.secure();
+  final _db = FirebaseFirestore.instance;
+  final _auth = FirebaseAuth.instance;
+
+  String get _uid => _auth.currentUser!.uid;
+
+  String _newCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    final r = Random.secure();
     return List.generate(6, (_) => chars[r.nextInt(chars.length)]).join();
   }
-  Future<TripModel> createTrip({required String name, required String ownerId, required String ownerName, String destination = ''}) async {
-    var code = _code();
-    for (var i=0; i<5 && (await _trips.doc(code).get()).exists; i++) { code = _code(); }
-    final trip = TripModel(id: code, name: name.trim(), ownerId: ownerId, ownerName: ownerName, isActive: true, memberIds: [ownerId], destination: destination.trim());
-    await _trips.doc(code).set({...trip.toMap(), 'memberIds': [ownerId], 'members': {ownerId: {'name': ownerName, 'latitude': null, 'longitude': null, 'updatedAt': FieldValue.serverTimestamp()}}});
-    return trip;
+
+  Future<String> createTrip(String name) async {
+    final user = _auth.currentUser!;
+    final ref = _db.collection('trips').doc();
+    final code = _newCode();
+    final batch = _db.batch();
+    batch.set(ref, {
+      'code': code,
+      'name': name.trim().isEmpty ? 'My convoy' : name.trim(),
+      'createdBy': user.uid,
+      'createdByName': user.displayName ?? user.email ?? 'Driver',
+      'status': 'active',
+      'destinationName': '',
+      'createdAt': FieldValue.serverTimestamp(),
+      'memberIds': [user.uid],
+    });
+    batch.set(ref.collection('members').doc(user.uid), {
+      'uid': user.uid,
+      'name': user.displayName ?? user.email ?? 'Driver',
+      'email': user.email,
+      'latitude': null,
+      'longitude': null,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    await batch.commit();
+    return ref.id;
   }
-  Future<TripModel> joinTrip({required String tripId, required String userId, required String userName}) async {
-    final ref = _trips.doc(tripId.trim().toUpperCase()); final snap = await ref.get();
-    if (!snap.exists) throw Exception('Trip code not found.');
-    final data = snap.data()!;
-    if (data['isActive'] != true) throw Exception('This trip is closed.');
-    await ref.update({'memberIds': FieldValue.arrayUnion([userId]), 'members.$userId': {'name': userName, 'latitude': null, 'longitude': null, 'updatedAt': FieldValue.serverTimestamp()}});
-    return TripModel.fromMap(snap.id, data);
+
+  Future<String> joinTrip(String code) async {
+    final query = await _db.collection('trips')
+        .where('code', isEqualTo: code.trim().toUpperCase())
+        .where('status', isEqualTo: 'active')
+        .limit(1).get();
+    if (query.docs.isEmpty) throw Exception('No active trip found for that code.');
+    final trip = query.docs.first;
+    final user = _auth.currentUser!;
+    await trip.reference.collection('members').doc(_uid).set({
+      'uid': _uid,
+      'name': user.displayName ?? user.email ?? 'Member',
+      'email': user.email,
+      'latitude': null,
+      'longitude': null,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    await trip.reference.update({
+      'memberIds': FieldValue.arrayUnion([_uid]),
+    });
+    return trip.id;
   }
-  Stream<TripModel?> watchTrip(String id) => _trips.doc(id).snapshots().map((s) => s.exists ? TripModel.fromMap(s.id, s.data()!) : null);
-  Stream<DocumentSnapshot<Map<String, dynamic>>> watchTripDocument(String id) => _trips.doc(id).snapshots();
-  Future<void> updateMemberLocation({required String tripId, required String userId, required String userName, required double latitude, required double longitude}) =>
-    _trips.doc(tripId).update({'members.$userId': {'name': userName, 'latitude': latitude, 'longitude': longitude, 'updatedAt': FieldValue.serverTimestamp()}});
-  Future<void> closeTrip(String id) => _trips.doc(id).update({'isActive': false});
+
+  Stream<List<TripModel>> myActiveTrips() {
+    return _db.collection('trips')
+        .where('memberIds', arrayContains: _uid)
+        .where('status', isEqualTo: 'active')
+        .snapshots()
+        .map((s) => s.docs.map(TripModel.fromDoc).toList());
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> members(String tripId) =>
+      _db.collection('trips').doc(tripId).collection('members').snapshots();
+
+  Future<void> updateMyLocation(String tripId, double lat, double lng) async {
+    await _db.collection('trips').doc(tripId).collection('members')
+        .doc(_uid).set({
+      'uid': _uid,
+      'name': _auth.currentUser?.displayName ?? 'Member',
+      'email': _auth.currentUser?.email,
+      'latitude': lat,
+      'longitude': lng,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> endTrip(String tripId) async {
+    await _db.collection('trips').doc(tripId).update({
+      'status': 'completed',
+      'endedAt': FieldValue.serverTimestamp(),
+    });
+  }
 }

@@ -1,0 +1,5 @@
+<!-- Merge these keys into ios/Runner/Info.plist, inside the top-level <dict>. -->
+<key>NSLocationWhenInUseUsageDescription</key>
+<string>RouteMitra uses your location to show your position, calculate routes, and share your live trip location with your convoy while a trip is active.</string>
+<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+<string>RouteMitra uses location during an active trip so your convoy can stay connected. Background tracking must be explicitly enabled and tested before release.</string>

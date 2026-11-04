@@ -1,0 +1,44 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isTripOwner() {
+      return signedIn() && resource.data.ownerId == request.auth.uid;
+    }
+
+    function isTripMember() {
+      return signedIn() && request.auth.uid in resource.data.memberIds;
+    }
+
+    match /users/{userId} {
+      allow read, create, update, delete: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /trips/{tripId} {
+      // A six-character invite code is used to look up a trip. Keep codes random
+      // and do not expose personal data in public trip documents.
+      allow get: if signedIn();
+      allow list: if isTripMember();
+
+      allow create: if signedIn()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.isActive == true
+        && request.auth.uid in request.resource.data.memberIds;
+
+      // Organisers can update/close the trip. Signed-in travellers can join an
+      // active trip by adding only themselves to memberIds. Existing members
+      // can update their own live-location record through the app service.
+      allow update: if isTripOwner() || (
+        signedIn()
+        && resource.data.isActive == true
+        && request.resource.data.memberIds.hasAll(resource.data.memberIds)
+        && request.auth.uid in request.resource.data.memberIds
+      );
+
+      allow delete: if isTripOwner();
+    }
+  }
+}

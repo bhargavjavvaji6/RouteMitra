@@ -1,17 +1,35 @@
 import 'package:geolocator/geolocator.dart';
+
 class LocationService {
   Future<void> ensurePermission() async {
-    if (!await Geolocator.isLocationServiceEnabled()) throw Exception('Enable Location services on your device.');
-    var p = await Geolocator.checkPermission();
-    if (p == LocationPermission.denied) p = await Geolocator.requestPermission();
-    if (p == LocationPermission.denied || p == LocationPermission.deniedForever) throw Exception('Location permission was not granted. Enable it in Settings.');
+    if (!await Geolocator.isLocationServiceEnabled()) {
+      throw Exception('Please turn on Location/GPS on your phone.');
+    }
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      throw Exception('Location permission is required to share your trip.');
+    }
   }
+
   Future<Position> currentPosition() async {
     await ensurePermission();
-    return Geolocator.getCurrentPosition(locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
+    return Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+      ),
+    );
   }
-  Stream<Position> positionStream() async* {
-    await ensurePermission();
-    yield* Geolocator.getPositionStream(locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 5));
+
+  Stream<Position> positions() {
+    return Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 8,
+      ),
+    );
   }
 }
